@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+    <title>Distributed Drawing Board</title>
+
+    <style>
+
+        body {
+            margin: 0;
+            font-family: Arial;
+            background: #f5f5f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h2 {
+            margin-top: 20px;
+        }
+
+        canvas {
+            background: white;
+            border: 2px solid black;
+            cursor: crosshair;
+        }
+
+        #toolbar {
+            margin: 10px;
+        }
+
+        button {
+            padding: 6px 12px;
+            margin-right: 5px;
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+<h2>Real-Time Drawing Board</h2>
+
+<div id="toolbar">
+    <button onclick="setTool('brush')">Brush</button>
+    <button onclick="setTool('eraser')">Eraser</button>
+    <label for="color">Color:</label>
+    <select id="color" onchange="state.color = this.value">
+        <option value="#000000">Black</option>
+        <option value="#ff0000">Red</option>
+        <option value="#00ff00">Green</option>
+        <option value="#0000ff">Blue</option>
+    </select>
+</div>
+
+<canvas id="board" width="900" height="500"></canvas>
+
+<script>
+
+    /* =========================
+       GLOBAL STATE
+    ========================= */
+
+    const canvas = document.getElementById("board")
+    const ctx = canvas.getContext("2d")
+
+    const ws = new WebSocket("ws://localhost:3000")
+
+    let drawing = false
+    let prevX = 0
+    let prevY = 0
+
+    const state = {
+        tool: "brush",
+        color: "#000000",
+        size: 2
+    }
+
+    ctx.lineCap = "round"
+    ctx.lineJoin = "round"
+
+    /* =========================
+       TOOL MANAGEMENT
+    ========================= */
+
+    function setTool(tool) {
+        state.tool = tool
+    }
+
+    /* =========================
+       MOUSE INPUT
+    ========================= */
+
+    canvas.addEventListener("mousedown", (e) => {
+
+        drawing = true
+
+        const rect = canvas.getBoundingClientRect()
+
+        prevX = e.clientX - rect.left
+        prevY = e.clientY - rect.top
+
+    })
+
+    canvas.addEventListener("mouseup", () => {
+        drawing = false
+    })
+
+    canvas.addEventListener("mouseleave", () => {
+        drawing = false
+    })
+
+    canvas.addEventListener("mousemove", (e) => {
+
+        if (!drawing) return
+
+        const rect = canvas.getBoundingClientRect()
+
+        const x = e.clientX - rect.left
+        const y = e.clientY - rect.top
+
+        const stroke = {
+            type: "stroke",
+            tool: state.tool,
+            color: state.color,
+            size: state.size,
+            x0: prevX,
+            y0: prevY,
+            x1: x,
+            y1: y
+        }
+
+        ws.send(JSON.stringify(stroke))
+
+        prevX = x
+        prevY = y
+
+    })
+
+    /* =========================
+       WEBSOCKET RECEIVE
+    ========================= */
+
+    ws.onmessage = (event) => {
+
+        const data = JSON.parse(event.data)
+
+        if (data.type === "init") {
+            data.strokes.forEach(drawStroke)
+            return
+        }
+
+        if (data.type === "stroke") {
+            drawStroke(data)
+        }
+
+    }
+
+    /* =========================
+       RENDER ENGINE
+    ========================= */
+
+    function drawStroke(s) {
+
+        ctx.beginPath()
+
+        ctx.moveTo(s.x0, s.y0)
+        ctx.lineTo(s.x1, s.y1)
+
+        if (s.tool === "eraser") {
+            ctx.strokeStyle = "white"
+            ctx.lineWidth = 20
+        } else {
+            ctx.strokeStyle = s.color
+            ctx.lineWidth = s.size
+        }
+
+        ctx.stroke()
+
+    }
+
+</script>
+
+</body>
+
+</html>
