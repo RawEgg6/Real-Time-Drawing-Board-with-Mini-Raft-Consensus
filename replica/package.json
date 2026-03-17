@@ -1,0 +1,13 @@
+{
+  "name": "replica",
+  "version": "1.0.0",
+  "description": "Phase 2 replica service for replicated stroke log",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

@@ -116,7 +116,7 @@ Therefore Phase 2 introduces **replicated state nodes**.
 
 ---
 
-# 5. Phase 2 — Replicated Stroke Log
+# 5. Phase 2 — Replicated Stroke Log (✅ Completed)
 
 ## Objective
 
