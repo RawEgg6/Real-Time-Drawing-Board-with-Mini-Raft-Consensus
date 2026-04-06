@@ -14,7 +14,8 @@ const REPLICAS = [
   "http://localhost:4003"
 ]
 
-async function sendToLeader(stroke) {
+
+/* async function sendToLeader(stroke) {
   for (const replica of REPLICAS) {
     try {
       await axios.post(replica + "/stroke", {
@@ -27,6 +28,31 @@ async function sendToLeader(stroke) {
   }
 
   throw new Error("No leader available")
+} */
+
+// phase 4
+async function findLeader() {
+  for (const replica of REPLICAS) {
+    try {
+      const res = await axios.get(replica + "/status")
+
+      if (res.data.state === "leader") {
+        return replica
+      }
+    } catch (err) {
+      // ignore dead replicas
+    }
+  }
+
+  throw new Error("No leader available")
+}
+
+async function sendToLeader(stroke) {
+  const leader = await findLeader()
+
+  await axios.post(leader + "/stroke", {
+    entry: stroke
+  })
 }
 
 async function getStrokeLog() {
@@ -38,6 +64,7 @@ async function getStrokeLog() {
   }
   return []
 }
+
 
 const server = app.listen(PORT, () => {
   console.log("Gateway running on port", PORT)
