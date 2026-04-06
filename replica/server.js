@@ -75,7 +75,25 @@ app.post("/stroke", async (req, res) => {
 
     strokeLog.append(entry)
     const replicationResults = await replicateToFollowers(entry)
-    const failedReplications = replicationResults.filter((result) => !result.success)
+    //phase 5
+    // count successful replicas
+    const successCount = replicationResults.filter(r => r.success).length + 1
+    const MAJORITY = Math.floor((PEERS.length + 1) / 2) + 1
+if (successCount >= MAJORITY) {
+    return res.json({
+        success: true,
+        committed: true,
+        replicaId: REPLICA_ID
+    })
+} else {
+    console.error("Not enough replicas for commit")
+
+    return res.status(500).json({
+        success: false,
+        error: "Failed to reach majority"
+    })
+}
+    /*const failedReplications = replicationResults.filter((result) => !result.success)
     if (failedReplications.length > 0) {
         console.error("Replication failures:", failedReplications)
     }
@@ -84,7 +102,7 @@ app.post("/stroke", async (req, res) => {
         success: true,
         replicaId: REPLICA_ID,
         replicatedTo: replicationResults
-    })
+    }) */
 })
 
 app.post("/append-entry", (req, res) => {
