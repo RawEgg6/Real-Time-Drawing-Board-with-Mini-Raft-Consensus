@@ -2,7 +2,8 @@ const express = require("express")
 const StrokeLog = require("./log")
 
 const app = express()
-app.use(express.json())
+// Increase JSON body size limit so /sync-log can handle large logs
+app.use(express.json({ limit: "10mb" }))
 
 const REPLICA_ID = process.env.REPLICA_ID || "replica1"
 const PORT = Number(process.env.PORT || 4001)
@@ -20,6 +21,7 @@ let lastHeartbeat = Date.now()
 
 const HEARTBEAT_INTERVAL = 1000
 const HEARTBEAT_TIMEOUT = 3000
+const SYNC_INTERVAL = 5000
 
 async function replicateToFollowers(entry) {
     if (PEERS.length === 0) {
@@ -130,6 +132,26 @@ app.get("/log", (req, res) => {
     })
 })
 
+// phase 6 - log synchronization endpoint
+app.post("/sync-log", (req, res) => {
+    const { entries } = req.body || {}
+
+    if (!Array.isArray(entries)) {
+        return res.status(400).json({
+            success: false,
+            error: "Invalid entries payload"
+        })
+    }
+
+    strokeLog.setAll(entries)
+
+    return res.json({
+        success: true,
+        replicaId: REPLICA_ID,
+        length: entries.length
+    })
+})
+
 //phase 4 - heartbeat
 app.post("/heartbeat", (req, res) => {
     const { leaderId } = req.body
@@ -180,6 +202,42 @@ function detectLeaderFailure() {
     }
 }
 
+// phase 6 - periodically ensure followers are caught up with leader's log
+async function syncFollowersLog() {
+    if (state !== "leader") return
+
+    const leaderLog = strokeLog.getAll()
+
+    for (const peer of PEERS) {
+        try {
+            const logRes = await fetch(`${peer}/log`)
+
+            if (!logRes.ok) {
+                continue
+            }
+
+            const data = await logRes.json()
+            const followerLog = Array.isArray(data.log) ? data.log : []
+
+            if (followerLog.length < leaderLog.length) {
+                try {
+                    await fetch(`${peer}/sync-log`, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({ entries: leaderLog })
+                    })
+                } catch (err) {
+                    console.error(`[${REPLICA_ID}] Failed to sync log to`, peer, err.message)
+                }
+            }
+        } catch (err) {
+            console.error(`[${REPLICA_ID}] Failed to check follower log`, peer, err.message)
+        }
+    }
+}
+
 app.listen(PORT, () => {
     console.log(`[${REPLICA_ID}] running on port ${PORT} (leader=${IS_LEADER})`)
     if (IS_LEADER) {
@@ -190,3 +248,4 @@ app.listen(PORT, () => {
 //phase 4 addition: loops
 setInterval(sendHeartbeats, HEARTBEAT_INTERVAL)
 setInterval(detectLeaderFailure, 1000)
+setInterval(syncFollowersLog, SYNC_INTERVAL)

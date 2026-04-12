@@ -11,6 +11,11 @@ class StrokeLog {
     getAll() {
         return [...this.entries]
     }
+
+    // Replace the entire log with a new set of entries
+    setAll(entries) {
+        this.entries = Array.isArray(entries) ? [...entries] : []
+    }
 }
 
 module.exports = StrokeLog
