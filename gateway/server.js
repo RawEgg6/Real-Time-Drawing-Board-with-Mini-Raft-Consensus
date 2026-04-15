@@ -6,13 +6,12 @@ const axios = require("axios")
 const app = express()
 app.use(cors())
 
-const PORT = 3000
+const PORT = Number(process.env.PORT || 3000)
 
-const REPLICAS = [
-  "http://localhost:4001",
-  "http://localhost:4002",
-  "http://localhost:4003"
-]
+const REPLICAS = (process.env.REPLICAS || "http://localhost:4001,http://localhost:4002,http://localhost:4003")
+  .split(",")
+  .map((url) => url.trim())
+  .filter(Boolean)
 
 
 /* async function sendToLeader(stroke) {

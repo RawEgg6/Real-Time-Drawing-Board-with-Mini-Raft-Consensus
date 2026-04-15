@@ -35,6 +35,35 @@
             margin-right: 5px;
         }
 
+        #status {
+            margin-top: 10px;
+            padding: 10px 15px;
+            background: #e8f5e9;
+            border: 1px solid #4caf50;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: monospace;
+            min-width: 300px;
+            text-align: left;
+        }
+
+        .status-item {
+            margin: 4px 0;
+        }
+
+        .status-label {
+            font-weight: bold;
+            color: #2e7d32;
+        }
+
+        .status-ok {
+            color: #2e7d32;
+        }
+
+        .status-error {
+            color: #d32f2f;
+        }
+
     </style>
 
 </head>
@@ -52,6 +81,13 @@
 
 <canvas id="board" width="900" height="500"></canvas>
 
+<div id="status">
+    <div class="status-item"><span class="status-label">Status</span></div>
+    <div class="status-item">Connection: <span id="connStatus" class="status-error">Connecting...</span></div>
+    <div class="status-item">Strokes: <span id="strokeCount">0</span></div>
+    <div class="status-item">Replicas Synced: <span id="replicaCount">0/3</span></div>
+</div>
+
 <script>
 
     /* =========================
@@ -60,12 +96,15 @@
 
     const canvas = document.getElementById("board")
     const ctx = canvas.getContext("2d")
+    const colorPicker = document.getElementById("colorPicker")
+    const sizePicker = document.getElementById("sizePicker")
 
     const ws = new WebSocket("ws://localhost:3000")
 
     let drawing = false
     let prevX = 0
     let prevY = 0
+    let strokeCount = 0
 
     const state = {
         tool: "brush",
@@ -75,6 +114,32 @@
 
     ctx.lineCap = "round"
     ctx.lineJoin = "round"
+
+    // Status update functions
+    function updateConnStatus() {
+        const connEl = document.getElementById("connStatus")
+        if (ws.readyState === WebSocket.OPEN) {
+            connEl.textContent = "Connected ✓"
+            connEl.className = "status-ok"
+        } else if (ws.readyState === WebSocket.CONNECTING) {
+            connEl.textContent = "Connecting..."
+            connEl.className = "status-error"
+        } else {
+            connEl.textContent = "Disconnected"
+            connEl.className = "status-error"
+        }
+    }
+
+    function updateStrokeCount() {
+        document.getElementById("strokeCount").textContent = strokeCount
+    }
+
+    // Poll replica consistency every 2 seconds
+    setInterval(() => {
+        updateConnStatus()
+    }, 500)
+
+    updateConnStatus()
 
     /* =========================
        TOOL MANAGEMENT
@@ -137,7 +202,9 @@
             y1: y
         }
 
-        ws.send(JSON.stringify(stroke))
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(stroke))
+        }
 
         prevX = x
         prevY = y
@@ -153,12 +220,16 @@
         const data = JSON.parse(event.data)
 
         if (data.type === "init") {
+            strokeCount = data.strokes.length
             data.strokes.forEach(drawStroke)
+            updateStrokeCount()
             return
         }
 
         if (data.type === "stroke") {
+            strokeCount++
             drawStroke(data)
+            updateStrokeCount()
         }
 
     }

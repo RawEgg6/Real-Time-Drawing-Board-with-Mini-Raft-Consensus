@@ -304,43 +304,28 @@ Candidate → Leader
 
 ---
 
-# 9. Phase 4 — Heartbeats and Failover (✅ Completed)
-Features:
-Leader sends periodic heartbeats
-Followers track lastHeartbeat
-On timeout → follower becomes leader
-Failover Flow:
-Leader dies → Followers detect timeout → New leader elected
-Gateway Update:
-Gateway dynamically discovers leader via:
-GET /status
-Routes requests to current leader
-Result:
-System continues working after leader failure ✅
+# 9. Phase 4 — Heartbeats and Failover
+
+Leader periodically sends:
+
+```
+heartbeat messages
+```
+
+Followers reset their election timers when heartbeats arrive.
+
+If leader fails:
+
+```
+new election occurs
+new leader chosen
+```
+
+Gateway must automatically route traffic to the new leader.
+
 ---
 
-# 10. Phase 5 — Log Commit & Majority Quorum (✅ Completed)
-Core Idea:
-
-Entries are committed only after majority replication
-
-For 3 replicas:
-
-majority = 2
-Implementation:
-Leader appends entry locally
-Sends to followers
-Counts successful acknowledgments
-successCount = followers_success + leader
-Commit Rule:
-if successCount >= majority → commit
-else → reject write
-
-🧪 Phase 5 Behavior Verification
-Scenario	Result
-3 replicas alive	✅ Works
-2 replicas alive	✅ Works (majority reached)
-1 replica alive	❌ Fails (no quorum)
+# 10. Phase 5 — Log Commit & Majority Quorum
 
 Entries are considered **committed only after majority replication**.
 
@@ -353,11 +338,6 @@ majority = 2
 Leader must receive acknowledgments from at least **two replicas** before committing entries.
 
 ---
-⚠️ Known Limitations (Expected at this stage)
-No persistent storage (logs reset on restart)
-No log synchronization on leader change
-Possible duplicate leader elections (no voting)
-No retry/backoff for failed replication
 
 # 11. Phase 6 — Restart & Log Synchronization
 
@@ -375,23 +355,88 @@ POST /sync-log
 
 ---
 
-# 12. Phase 7 — Docker Deployment
+# 12. 
 
-Final architecture runs in containers:
+## ✅ Phase 7 Implementation Added
 
+This repository now includes Docker setup files:
+
+* `docker-compose.yml`
+* `gateway/Dockerfile`
+* `replica/Dockerfile`
+* `.dockerignore`
+
+### Container Networking
+
+* `gateway` connects to replicas using service DNS names:
+   * `http://replica1:4001`
+   * `http://replica2:4002`
+   * `http://replica3:4003`
+* `gateway/server.js` now reads replica URLs from `REPLICAS` environment variable.
+
+### Replica Identity and Roles
+
+Compose sets required environment variables for each node:
+
+* `REPLICA_ID`
+* `PORT`
+* `IS_LEADER`
+* `PEERS`
+
+Initial setup:
+
+* `replica1` starts as leader
+* `replica2`, `replica3` start as followers
+
+### Hot Reload in Containers
+
+Bind mounts are enabled so local code changes reflect immediately:
+
+* `./gateway:/app`
+* `./replica:/app`
+
+Services run with Node watch mode:
+
+* `node --watch server.js`
+
+---
+
+## Run Phase 7 (WSL / Docker)
+
+From project root, run:
+
+```bash
+docker compose up --build
 ```
-gateway
-replica1
-replica2
-replica3
+
+Run in detached mode:
+
+```bash
+docker compose up --build -d
 ```
 
-Docker Compose responsibilities:
+Stop all services:
 
-* start all services
-* configure networking
-* assign replica IDs
-* enable bind mounts for hot reload
+```bash
+docker compose down
+```
+
+### Service Ports
+
+* Gateway: `localhost:3000`
+* Replica 1: `localhost:4001`
+* Replica 2: `localhost:4002`
+* Replica 3: `localhost:4003`
+
+### Verify Replication
+
+```bash
+curl http://localhost:4001/log
+curl http://localhost:4002/log
+curl http://localhost:4003/log
+```
+
+All three logs should converge to the same committed stroke sequence.
 
 ---
 

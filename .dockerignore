@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+npm-debug.log
+.git
+.gitignore
+.vscode
+Dockerfile*
+docker-compose*.yml
+Real-Time-Drawing-Board-with-Mini-Raft-Consensus
