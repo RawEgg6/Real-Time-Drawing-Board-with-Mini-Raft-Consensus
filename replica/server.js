@@ -60,6 +60,36 @@ async function replicateToFollowers(entry) {
     return results
 }
 
+async function clearFollowersLog() {
+    if (PEERS.length === 0) {
+        return []
+    }
+
+    const results = await Promise.all(
+        PEERS.map(async (peerUrl) => {
+            try {
+                const response = await fetch(`${peerUrl}/sync-log`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ entries: [] })
+                })
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`)
+                }
+
+                return { peerUrl, success: true }
+            } catch (error) {
+                return { peerUrl, success: false, error: error.message }
+            }
+        })
+    )
+
+    return results
+}
+
 app.post("/stroke", async (req, res) => {
     if (state !== "leader") {
         return res.status(400).json({
@@ -107,6 +137,33 @@ if (successCount >= MAJORITY) {
     }) */
 })
 
+app.post("/clear", async (req, res) => {
+    if (state !== "leader") {
+        return res.status(400).json({
+            error: "This replica is not the leader"
+        })
+    }
+
+    strokeLog.setAll([])
+    const replicationResults = await clearFollowersLog()
+
+    const successCount = replicationResults.filter(r => r.success).length + 1
+    const MAJORITY = Math.floor((PEERS.length + 1) / 2) + 1
+
+    if (successCount >= MAJORITY) {
+        return res.json({
+            success: true,
+            committed: true,
+            replicaId: REPLICA_ID
+        })
+    }
+
+    return res.status(500).json({
+        success: false,
+        error: "Failed to reach majority"
+    })
+})
+
 app.post("/append-entry", (req, res) => {
     const { entry } = req.body || {}
 
@@ -127,7 +184,7 @@ app.post("/append-entry", (req, res) => {
 app.get("/log", (req, res) => {
     res.json({
         replicaId: REPLICA_ID,
-        isLeader: IS_LEADER,
+        isLeader: state === "leader",
         log: strokeLog.getAll()
     })
 })
@@ -155,6 +212,10 @@ app.post("/sync-log", (req, res) => {
 //phase 4 - heartbeat
 app.post("/heartbeat", (req, res) => {
     const { leaderId } = req.body
+
+    if (state === "leader") {
+        return res.json({ success: true })
+    }
 
     state = "follower"
     currentLeader = leaderId

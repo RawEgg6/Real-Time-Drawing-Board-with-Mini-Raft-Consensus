@@ -75,6 +75,8 @@
 <div id="toolbar">
     <button onclick="setTool('brush')">Brush</button>
     <button onclick="setTool('eraser')">Eraser</button>
+    <button onclick="clearBoard()">Clear Board</button>
+    <button onclick="toggleOfflineMode()">Toggle Offline Demo</button>
     <input type="color" id="colorPicker">
     <input type="range" id="sizePicker" min="1" max="10" value="2">
 </div>
@@ -85,6 +87,7 @@
     <div class="status-item"><span class="status-label">Status</span></div>
     <div class="status-item">Connection: <span id="connStatus" class="status-error">Connecting...</span></div>
     <div class="status-item">Strokes: <span id="strokeCount">0</span></div>
+    <div class="status-item">Offline Queue: <span id="pendingCount">0</span></div>
     <div class="status-item">Replicas Synced: <span id="replicaCount">0/3</span></div>
 </div>
 
@@ -99,12 +102,42 @@
     const colorPicker = document.getElementById("colorPicker")
     const sizePicker = document.getElementById("sizePicker")
 
-    const ws = new WebSocket("ws://localhost:3000")
+    const WS_PROTOCOL = window.location.protocol === "https:" ? "wss" : "ws"
+    const WS_URL = `${WS_PROTOCOL}://${window.location.host}`
+    const INTERNET_PROBE_URLS = [
+        "https://www.gstatic.com/generate_204",
+        "https://www.google.com/generate_204"
+    ]
+    const OFFLINE_QUEUE_KEY = "drawing_offline_queue_v1"
+    const CLIENT_ID_KEY = "drawing_client_id_v1"
+
+    let ws = null
 
     let drawing = false
     let prevX = 0
     let prevY = 0
     let strokeCount = 0
+    let queuedStrokes = []
+    let forcedOfflineMode = false
+    let reconnectTimer = null
+    let internetReachable = true
+    let probeFailureCount = 0
+    let probeTimer = null
+
+    const seenStrokeIds = new Set()
+
+    function getClientId() {
+        let id = localStorage.getItem(CLIENT_ID_KEY)
+
+        if (!id) {
+            id = `client_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+            localStorage.setItem(CLIENT_ID_KEY, id)
+        }
+
+        return id
+    }
+
+    const clientId = getClientId()
 
     const state = {
         tool: "brush",
@@ -118,10 +151,20 @@
     // Status update functions
     function updateConnStatus() {
         const connEl = document.getElementById("connStatus")
-        if (ws.readyState === WebSocket.OPEN) {
+
+        if (forcedOfflineMode) {
+            connEl.textContent = "Offline Demo Mode"
+            connEl.className = "status-error"
+        } else if (!navigator.onLine) {
+            connEl.textContent = forcedOfflineMode ? "Offline Demo Mode" : "Offline (browser)"
+            connEl.className = "status-error"
+        } else if (!internetReachable) {
+            connEl.textContent = "Disconnected"
+            connEl.className = "status-error"
+        } else if (ws && ws.readyState === WebSocket.OPEN) {
             connEl.textContent = "Connected ✓"
             connEl.className = "status-ok"
-        } else if (ws.readyState === WebSocket.CONNECTING) {
+        } else if (ws && ws.readyState === WebSocket.CONNECTING) {
             connEl.textContent = "Connecting..."
             connEl.className = "status-error"
         } else {
@@ -134,12 +177,231 @@
         document.getElementById("strokeCount").textContent = strokeCount
     }
 
+    function updatePendingCount() {
+        document.getElementById("pendingCount").textContent = queuedStrokes.length
+    }
+
+    function loadQueuedStrokes() {
+        try {
+            const raw = localStorage.getItem(OFFLINE_QUEUE_KEY)
+            const parsed = raw ? JSON.parse(raw) : []
+
+            if (Array.isArray(parsed)) {
+                queuedStrokes = parsed
+            }
+        } catch (err) {
+            queuedStrokes = []
+        }
+
+        updatePendingCount()
+    }
+
+    function saveQueuedStrokes() {
+        localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queuedStrokes))
+        updatePendingCount()
+    }
+
+    function queueOfflineStroke(stroke) {
+        queuedStrokes.push(stroke)
+        saveQueuedStrokes()
+    }
+
+    function scheduleReconnect() {
+        if (reconnectTimer || isOfflineMode()) {
+            return
+        }
+
+        reconnectTimer = setTimeout(() => {
+            reconnectTimer = null
+            connectWebSocket()
+        }, 1000)
+    }
+
+    function toggleOfflineMode() {
+        forcedOfflineMode = !forcedOfflineMode
+
+        if (forcedOfflineMode && ws && ws.readyState === WebSocket.OPEN) {
+            ws.close()
+        }
+
+        if (!forcedOfflineMode) {
+            connectWebSocket()
+            flushQueuedStrokes()
+        }
+
+        updateConnStatus()
+    }
+
+    function clearBoardLocal() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        seenStrokeIds.clear()
+        strokeCount = 0
+        queuedStrokes = []
+        saveQueuedStrokes()
+        updateStrokeCount()
+    }
+
+    function clearBoard() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            return
+        }
+
+        ws.send(JSON.stringify({ type: "clear" }))
+    }
+
+    function isOfflineMode() {
+        return forcedOfflineMode || !navigator.onLine || !internetReachable
+    }
+
+    async function probeInternetConnectivity() {
+        if (forcedOfflineMode || !navigator.onLine) {
+            internetReachable = false
+            probeFailureCount = 0
+            updateConnStatus()
+            return
+        }
+
+        let reachable = false
+
+        for (const probeUrl of INTERNET_PROBE_URLS) {
+            try {
+                const controller = new AbortController()
+                const timeout = setTimeout(() => controller.abort(), 2500)
+
+                await fetch(probeUrl, {
+                    mode: "no-cors",
+                    cache: "no-store",
+                    signal: controller.signal
+                })
+
+                clearTimeout(timeout)
+                reachable = true
+                break
+            } catch (err) {
+                // try next probe URL
+            }
+        }
+
+        if (reachable) {
+            internetReachable = true
+            probeFailureCount = 0
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                connectWebSocket()
+            }
+        } else {
+            probeFailureCount += 1
+            if (probeFailureCount >= 2) {
+                internetReachable = false
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.close()
+                }
+            }
+        }
+
+        updateConnStatus()
+    }
+
+    function flushQueuedStrokes() {
+        if (isOfflineMode() || !ws || ws.readyState !== WebSocket.OPEN || queuedStrokes.length === 0) {
+            return
+        }
+
+        ws.send(JSON.stringify({
+            type: "batch",
+            strokes: queuedStrokes
+        }))
+
+        queuedStrokes = []
+        saveQueuedStrokes()
+    }
+
+    function renderIfNew(stroke) {
+        if (!stroke || stroke.type !== "stroke") return
+
+        if (stroke.id && seenStrokeIds.has(stroke.id)) {
+            return
+        }
+
+        if (stroke.id) {
+            seenStrokeIds.add(stroke.id)
+        }
+
+        drawStroke(stroke)
+        strokeCount++
+        updateStrokeCount()
+    }
+
+    function connectWebSocket() {
+        if (isOfflineMode()) {
+            return
+        }
+
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+            return
+        }
+
+        ws = new WebSocket(WS_URL)
+
+        ws.onopen = () => {
+            updateConnStatus()
+            flushQueuedStrokes()
+
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer)
+                reconnectTimer = null
+            }
+        }
+
+        ws.onclose = () => {
+            updateConnStatus()
+
+            if (!isOfflineMode()) {
+                scheduleReconnect()
+            }
+        }
+
+        ws.onerror = () => {
+            updateConnStatus()
+        }
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data)
+
+            if (data.type === "init") {
+                // Rehydrate any server strokes without wiping locally rendered offline strokes.
+                data.strokes.forEach(renderIfNew)
+                queuedStrokes.forEach(renderIfNew)
+                updateStrokeCount()
+                updatePendingCount()
+                flushQueuedStrokes()
+                return
+            }
+
+            if (data.type === "stroke") {
+                renderIfNew(data)
+            }
+
+            if (data.type === "clear") {
+                clearBoardLocal()
+            }
+        }
+    }
+
     // Poll replica consistency every 2 seconds
     setInterval(() => {
         updateConnStatus()
+
+        if (!isOfflineMode() && (!ws || ws.readyState === WebSocket.CLOSED)) {
+            connectWebSocket()
+        }
     }, 500)
 
+    loadQueuedStrokes()
+    probeInternetConnectivity()
+    connectWebSocket()
     updateConnStatus()
+
+    probeTimer = setInterval(probeInternetConnectivity, 3000)
 
     /* =========================
        TOOL MANAGEMENT
@@ -193,6 +455,9 @@
 
         const stroke = {
             type: "stroke",
+            id: `${clientId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            clientId,
+            ts: Date.now(),
             tool: state.tool,
             color: state.color,
             size: state.size,
@@ -202,8 +467,13 @@
             y1: y
         }
 
-        if (ws.readyState === WebSocket.OPEN) {
+        // Draw immediately for smooth UX in both online and offline mode.
+        renderIfNew(stroke)
+
+        if (!isOfflineMode() && ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(stroke))
+        } else {
+            queueOfflineStroke(stroke)
         }
 
         prevX = x
@@ -215,24 +485,27 @@
        WEBSOCKET RECEIVE
     ========================= */
 
-    ws.onmessage = (event) => {
-
-        const data = JSON.parse(event.data)
-
-        if (data.type === "init") {
-            strokeCount = data.strokes.length
-            data.strokes.forEach(drawStroke)
-            updateStrokeCount()
+    window.addEventListener("online", () => {
+        if (forcedOfflineMode) {
             return
         }
 
-        if (data.type === "stroke") {
-            strokeCount++
-            drawStroke(data)
-            updateStrokeCount()
+        internetReachable = true
+        probeFailureCount = 0
+        connectWebSocket()
+        updateConnStatus()
+        flushQueuedStrokes()
+    })
+
+    window.addEventListener("offline", () => {
+        internetReachable = false
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close()
         }
 
-    }
+        updateConnStatus()
+    })
 
     /* =========================
        RENDER ENGINE
