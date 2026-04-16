@@ -190,7 +190,7 @@ async function sendHeartbeats() {
     }
 }
 
-function detectLeaderFailure() {
+async function detectLeaderFailure() {
     if (state === "leader") return
 
     const now = Date.now()
@@ -199,6 +199,9 @@ function detectLeaderFailure() {
         console.log(`[${REPLICA_ID}] Leader timeout → becoming leader`)
         state = "leader"
         currentLeader = REPLICA_ID
+        lastHeartbeat = Date.now()
+
+        await sendHeartbeats()
     }
 }
 
