@@ -1,537 +1,518 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drawing Board</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:         #f7f7f6;
+      --surface:    #ffffff;
+      --border:     #e8e8e6;
+      --border2:    #d4d4d0;
+      --text:       #1a1a18;
+      --text-2:     #6b6b67;
+      --text-3:     #a8a8a4;
+      --accent-ok:  #16a34a;
+      --accent-err: #dc2626;
+      --radius:     8px;
+      --r-sm:       5px;
+    }
 
-    <title>Distributed Drawing Board</title>
+    [data-theme="dark"] {
+      --bg:         #0a0a0a;
+      --surface:    #141414;
+      --border:     #27272a;
+      --border2:    #3f3f46;
+      --text:       #f4f4f5;
+      --text-2:     #a1a1aa;
+      --text-3:     #71717a;
+    }
 
-    <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
-        body {
-            margin: 0;
-            font-family: Arial;
-            background: #f5f5f5;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Geist', sans-serif;
+      display: grid;
+      grid-template-columns: 56px 1fr 220px;
+      grid-template-rows: 44px 1fr;
+      height: 100vh;
+      overflow: hidden;
+      transition: background 0.3s, color 0.3s;
+    }
 
-        h2 {
-            margin-top: 20px;
-        }
+    /* TOPBAR */
+    #topbar {
+      grid-column: 1 / -1;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 14px;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    #topbar h1 {
+      font-family: 'Geist Mono', monospace;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      color: var(--text);
+      margin-right: auto;
+    }
+    .dot-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-family: 'Geist Mono', monospace;
+      color: var(--text-2);
+    }
+    .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent-err);
+      transition: background 0.3s;
+    }
+    .dot.ok { background: var(--accent-ok); }
+    
+    #themeToggle {
+      background: transparent;
+      border: none;
+      color: var(--text-2);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px;
+      border-radius: var(--r-sm);
+      transition: color 0.2s, background 0.2s;
+    }
+    #themeToggle:hover {
+      color: var(--text);
+      background: var(--bg);
+    }
 
-        canvas {
-            background: white;
-            border: 2px solid black;
-            cursor: crosshair;
-        }
+    /* LEFT TOOLBAR */
+    #toolbar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 10px 0;
+      gap: 2px;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .tool-btn {
+      width: 36px; height: 36px;
+      border-radius: var(--r-sm);
+      border: none;
+      background: transparent;
+      color: var(--text-3);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      transition: background 0.1s, color 0.1s;
+      position: relative;
+    }
+    .tool-btn:hover { background: var(--bg); color: var(--text-2); }
+    .tool-btn.active { background: var(--text); color: var(--bg); }
+    .tool-sep { width: 20px; height: 1px; background: var(--border); margin: 5px 0; }
 
-        #toolbar {
-            margin: 10px;
-        }
+    /* tooltip */
+    .tool-btn::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 44px; top: 50%;
+      transform: translateY(-50%);
+      background: var(--text);
+      color: var(--bg);
+      font-family: 'Geist Mono', monospace;
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: var(--r-sm);
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s;
+      z-index: 20;
+    }
+    .tool-btn:hover::after { opacity: 1; }
 
-        button {
-            padding: 6px 12px;
-            margin-right: 5px;
-        }
+    /* CANVAS WRAP */
+    #canvas-wrap {
+      background: var(--bg);
+      background-image: radial-gradient(circle, var(--border2) 1px, transparent 1px);
+      background-size: 20px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      transition: background 0.3s;
+    }
+    #board {
+      background: #ffffff; /* Keep board white like standard paper */
+      box-shadow: 0 0 0 1px var(--border2), 0 4px 24px rgba(0,0,0,0.07);
+      cursor: crosshair;
+      display: block;
+      border-radius: 2px;
+    }
 
-        #status {
-            margin-top: 10px;
-            padding: 10px 15px;
-            background: #e8f5e9;
-            border: 1px solid #4caf50;
-            border-radius: 4px;
-            font-size: 14px;
-            font-family: monospace;
-            min-width: 300px;
-            text-align: left;
-        }
+    /* RIGHT PANEL */
+    #panel {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 14px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .sec-label {
+      font-family: 'Geist Mono', monospace;
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      margin-bottom: 8px;
+    }
 
-        .status-item {
-            margin: 4px 0;
-        }
+    /* SWATCHES */
+    #swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+    .swatch {
+      width: 100%; aspect-ratio: 1;
+      border-radius: 4px;
+      border: 1.5px solid transparent;
+      cursor: pointer;
+      transition: transform 0.1s, border-color 0.1s;
+    }
+    .swatch:hover { transform: scale(1.1); }
+    .swatch.active { border-color: var(--text); transform: scale(1.06); }
+    #customColor {
+      margin-top: 6px; width: 100%; height: 28px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      background: var(--bg);
+      padding: 2px;
+    }
 
-        .status-label {
-            font-weight: bold;
-            color: #2e7d32;
-        }
+    /* BRUSH PREVIEW */
+    #brushPreviewWrap {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      height: 52px; overflow: hidden;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    #brushPreview { width: 100%; height: 52px; border-radius: var(--radius); display: block; }
 
-        .status-ok {
-            color: #2e7d32;
-        }
+    /* SLIDERS */
+    .slider-row {
+      display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;
+    }
+    .slider-val {
+      font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--text-2);
+    }
+    input[type=range] {
+      -webkit-appearance: none; width: 100%; height: 3px;
+      border-radius: 2px; background: var(--border2); outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 13px; height: 13px;
+      border-radius: 50%; background: var(--text); cursor: pointer;
+      border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border2);
+    }
+    #opacitySlider { background: linear-gradient(to right, var(--border), var(--text)); }
 
-        .status-error {
-            color: #d32f2f;
-        }
+    /* STATS */
+    .stat-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-2); padding: 2px 0; }
+    .stat-val { font-family: 'Geist Mono', monospace; font-size: 10px; color: var(--text); }
 
-    </style>
+    /* LOG */
+    #log { display: flex; flex-direction: column; gap: 2px; }
+    .log-entry {
+      font-family: 'Geist Mono', monospace; font-size: 9px; color: var(--text-3);
+      padding: 2px 6px 2px 8px; border-left: 2px solid var(--border);
+      line-height: 1.5; animation: slideIn 0.15s ease;
+    }
+    .log-entry.stroke  { border-color: var(--border2); color: var(--text-2); }
+    .log-entry.connect { border-color: #93c5fd; color: #2563eb; }
+    .log-entry.sync    { border-color: #86efac; color: #15803d; }
+    
+    [data-theme="dark"] .log-entry.connect { border-color: #1e3a8a; color: #60a5fa; }
+    [data-theme="dark"] .log-entry.sync    { border-color: #14532d; color: #4ade80; }
 
+    @keyframes slideIn { from { opacity:0; transform:translateY(-3px); } to { opacity:1; transform:none; } }
+
+    /* CLEAR */
+    #clearBtn {
+      width: 100%; padding: 7px;
+      background: transparent; border: 1px solid var(--border2);
+      border-radius: var(--radius); color: var(--text-2);
+      font-family: 'Geist', sans-serif; font-size: 11px;
+      cursor: pointer; transition: border-color 0.15s, color 0.15s; letter-spacing: 0.02em;
+    }
+    #clearBtn:hover { border-color: var(--accent-err); color: var(--accent-err); }
+  </style>
 </head>
-
 <body>
 
-<h2>Real-Time Drawing Board</h2>
-
-<div id="toolbar">
-    <button onclick="setTool('brush')">Brush</button>
-    <button onclick="setTool('eraser')">Eraser</button>
-    <button onclick="clearBoard()">Clear Board</button>
-    <button onclick="toggleOfflineMode()">Toggle Offline Demo</button>
-    <input type="color" id="colorPicker">
-    <input type="range" id="sizePicker" min="1" max="10" value="2">
+<div id="topbar">
+  <h1>drawsync</h1>
+  <div class="dot-status"><div class="dot" id="connDot"></div><span id="connLabel">offline</span></div>
+  <button id="themeToggle" onclick="toggleTheme()" title="Toggle Theme">
+    <svg id="moonIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    <svg id="sunIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+  </button>
 </div>
 
-<canvas id="board" width="900" height="500"></canvas>
+<div id="toolbar">
+  <button class="tool-btn active" data-tool="pen"    data-tip="Pen"    onclick="setTool(this)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+  </button>
+  <button class="tool-btn" data-tool="brush"  data-tip="Brush"  onclick="setTool(this)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 3a3 3 0 00-3 3l-4 4-2-2-4.5 4.5A5 5 0 0011 19c2 0 3.5-1 4.5-2.5L18 12l-2-2 4-4a3 3 0 000-3z"/></svg>
+  </button>
+  <button class="tool-btn" data-tool="marker" data-tip="Marker" onclick="setTool(this)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="8" width="18" height="8" rx="2"/><path d="M21 12H3"/></svg>
+  </button>
+  <button class="tool-btn" data-tool="chalk"  data-tip="Chalk"  onclick="setTool(this)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20L20 4"/><circle cx="7" cy="17" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="17" cy="7" r="1.2" fill="currentColor" stroke="none"/></svg>
+  </button>
+  <button class="tool-btn" data-tool="spray"  data-tip="Spray"  onclick="setTool(this)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="16" r="3"/><path d="M11 16h4"/><path d="M15 13v6"/><circle cx="17" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="20" cy="5" r="1.2" fill="currentColor" stroke="none"/><circle cx="14" cy="5" r="1.2" fill="currentColor" stroke="none"/></svg>
+  </button>
+  <button class="tool-btn" data-tool="neon"   data-tip="Neon"   onclick="setTool(this)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+  </button>
+  <div class="tool-sep"></div>
+  <button class="tool-btn" data-tool="eraser" data-tip="Eraser" onclick="setTool(this)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 20H7L3 16l13-13 7 7-3 3"/><path d="M6 17l-3-3"/></svg>
+  </button>
+</div>
 
-<div id="status">
-    <div class="status-item"><span class="status-label">Status</span></div>
-    <div class="status-item">Connection: <span id="connStatus" class="status-error">Connecting...</span></div>
-    <div class="status-item">Strokes: <span id="strokeCount">0</span></div>
-    <div class="status-item">Offline Queue: <span id="pendingCount">0</span></div>
-    <div class="status-item">Replicas Synced: <span id="replicaCount">0/3</span></div>
+<div id="canvas-wrap">
+  <canvas id="board" width="860" height="560"></canvas>
+</div>
+
+<div id="panel">
+  <div>
+    <div class="sec-label">Color</div>
+    <div id="swatches"></div>
+    <input type="color" id="customColor" value="#1a1a18" title="Custom">
+  </div>
+  <div>
+    <div class="sec-label">Preview</div>
+    <div id="brushPreviewWrap"><canvas id="brushPreview" width="196" height="52"></canvas></div>
+  </div>
+  <div>
+    <div class="slider-row">
+      <div class="sec-label" style="margin:0">Size</div>
+      <span class="slider-val" id="sizeVal">4px</span>
+    </div>
+    <input type="range" id="sizeSlider" min="1" max="40" value="4">
+  </div>
+  <div>
+    <div class="slider-row">
+      <div class="sec-label" style="margin:0">Opacity</div>
+      <span class="slider-val" id="opacityVal">100%</span>
+    </div>
+    <input type="range" id="opacitySlider" min="5" max="100" value="100">
+  </div>
+  <div>
+    <div class="sec-label">Info</div>
+    <div class="stat-row"><span>Tool</span><span class="stat-val" id="statTool">pen</span></div>
+  </div>
+  <div>
+    <div class="sec-label">Log</div>
+    <div id="log"></div>
+  </div>
+  <button id="clearBtn" onclick="clearBoard()">Clear canvas</button>
 </div>
 
 <script>
+const canvas = document.getElementById("board")
+const ctx    = canvas.getContext("2d")
+ctx.lineCap  = "round"; ctx.lineJoin = "round"
 
-    /* =========================
-       GLOBAL STATE
-    ========================= */
+const PALETTE = [
+  "#1a1a18","#3d3d3a","#6b6b67","#a8a8a4","#ffffff",
+  "#dc2626","#ea580c","#ca8a04","#16a34a","#0284c7",
+  "#7c3aed","#db2777","#0d9488","#65a30d","#c2410c",
+  "#f87171","#fdba74","#fde68a","#bbf7d0","#bfdbfe"
+]
 
-    const canvas = document.getElementById("board")
-    const ctx = canvas.getContext("2d")
-    const colorPicker = document.getElementById("colorPicker")
-    const sizePicker = document.getElementById("sizePicker")
+let state = { tool: "pen", color: "#1a1a18", size: 4, opacity: 1.0 }
+let drawing = false, prevX = 0, prevY = 0, strokeCount = 0
+let ws = null, wsConnected = false
 
-    const WS_PROTOCOL = window.location.protocol === "https:" ? "wss" : "ws"
-    const WS_URL = `${WS_PROTOCOL}://${window.location.host}`
-    const INTERNET_PROBE_URLS = [
-        "https://www.gstatic.com/generate_204",
-        "https://www.google.com/generate_204"
-    ]
-    const OFFLINE_QUEUE_KEY = "drawing_offline_queue_v1"
-    const CLIENT_ID_KEY = "drawing_client_id_v1"
+function toggleTheme() {
+  const doc = document.documentElement;
+  if (doc.getAttribute('data-theme') === 'dark') {
+    doc.removeAttribute('data-theme');
+    document.getElementById('moonIcon').style.display = 'block';
+    document.getElementById('sunIcon').style.display = 'none';
+  } else {
+    doc.setAttribute('data-theme', 'dark');
+    document.getElementById('moonIcon').style.display = 'none';
+    document.getElementById('sunIcon').style.display = 'block';
+  }
+}
 
-    let ws = null
-
-    let drawing = false
-    let prevX = 0
-    let prevY = 0
-    let strokeCount = 0
-    let queuedStrokes = []
-    let forcedOfflineMode = false
-    let reconnectTimer = null
-    let internetReachable = true
-    let probeFailureCount = 0
-    let probeTimer = null
-
-    const seenStrokeIds = new Set()
-
-    function getClientId() {
-        let id = localStorage.getItem(CLIENT_ID_KEY)
-
-        if (!id) {
-            id = `client_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-            localStorage.setItem(CLIENT_ID_KEY, id)
-        }
-
-        return id
+function connectWS() {
+  try {
+    ws = new WebSocket("ws://localhost:3000")
+    ws.onopen  = () => { wsConnected = true;  updateConn(); addLog("connected :3000", "connect") }
+    ws.onclose = () => { wsConnected = false; updateConn(); addLog("disconnected — retry 3s", "connect"); setTimeout(connectWS, 3000) }
+    ws.onerror = () => { wsConnected = false; updateConn() }
+    ws.onmessage = e => {
+      const d = JSON.parse(e.data)
+      if (d.type === "init")   { d.strokes.forEach(s => drawStroke(s, false)); addLog("replayed strokes", "sync") }
+      if (d.type === "stroke") { drawStroke(d, false); }
+      if (d.type === "clear")  { ctx.clearRect(0,0,canvas.width,canvas.height); addLog("remote clear","sync") }
     }
-
-    const clientId = getClientId()
-
-    const state = {
-        tool: "brush",
-        color: "#000000",
-        size: 2
-    }
-
-    ctx.lineCap = "round"
-    ctx.lineJoin = "round"
-
-    // Status update functions
-    function updateConnStatus() {
-        const connEl = document.getElementById("connStatus")
-
-        if (forcedOfflineMode) {
-            connEl.textContent = "Offline Demo Mode"
-            connEl.className = "status-error"
-        } else if (!navigator.onLine) {
-            connEl.textContent = forcedOfflineMode ? "Offline Demo Mode" : "Offline (browser)"
-            connEl.className = "status-error"
-        } else if (!internetReachable) {
-            connEl.textContent = "Disconnected"
-            connEl.className = "status-error"
-        } else if (ws && ws.readyState === WebSocket.OPEN) {
-            connEl.textContent = "Connected ✓"
-            connEl.className = "status-ok"
-        } else if (ws && ws.readyState === WebSocket.CONNECTING) {
-            connEl.textContent = "Connecting..."
-            connEl.className = "status-error"
-        } else {
-            connEl.textContent = "Disconnected"
-            connEl.className = "status-error"
-        }
-    }
-
-    function updateStrokeCount() {
-        document.getElementById("strokeCount").textContent = strokeCount
-    }
-
-    function updatePendingCount() {
-        document.getElementById("pendingCount").textContent = queuedStrokes.length
-    }
-
-    function loadQueuedStrokes() {
-        try {
-            const raw = localStorage.getItem(OFFLINE_QUEUE_KEY)
-            const parsed = raw ? JSON.parse(raw) : []
-
-            if (Array.isArray(parsed)) {
-                queuedStrokes = parsed
-            }
-        } catch (err) {
-            queuedStrokes = []
-        }
-
-        updatePendingCount()
-    }
-
-    function saveQueuedStrokes() {
-        localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queuedStrokes))
-        updatePendingCount()
-    }
-
-    function queueOfflineStroke(stroke) {
-        queuedStrokes.push(stroke)
-        saveQueuedStrokes()
-    }
-
-    function scheduleReconnect() {
-        if (reconnectTimer || isOfflineMode()) {
-            return
-        }
-
-        reconnectTimer = setTimeout(() => {
-            reconnectTimer = null
-            connectWebSocket()
-        }, 1000)
-    }
-
-    function toggleOfflineMode() {
-        forcedOfflineMode = !forcedOfflineMode
-
-        if (forcedOfflineMode && ws && ws.readyState === WebSocket.OPEN) {
-            ws.close()
-        }
-
-        if (!forcedOfflineMode) {
-            connectWebSocket()
-            flushQueuedStrokes()
-        }
-
-        updateConnStatus()
-    }
-
-    function clearBoardLocal() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height)
-        seenStrokeIds.clear()
-        strokeCount = 0
-        queuedStrokes = []
-        saveQueuedStrokes()
-        updateStrokeCount()
-    }
-
-    function clearBoard() {
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-            return
-        }
-
-        ws.send(JSON.stringify({ type: "clear" }))
-    }
-
-    function isOfflineMode() {
-        return forcedOfflineMode || !navigator.onLine || !internetReachable
-    }
-
-    async function probeInternetConnectivity() {
-        if (forcedOfflineMode || !navigator.onLine) {
-            internetReachable = false
-            probeFailureCount = 0
-            updateConnStatus()
-            return
-        }
-
-        let reachable = false
-
-        for (const probeUrl of INTERNET_PROBE_URLS) {
-            try {
-                const controller = new AbortController()
-                const timeout = setTimeout(() => controller.abort(), 2500)
-
-                await fetch(probeUrl, {
-                    mode: "no-cors",
-                    cache: "no-store",
-                    signal: controller.signal
-                })
-
-                clearTimeout(timeout)
-                reachable = true
-                break
-            } catch (err) {
-                // try next probe URL
-            }
-        }
-
-        if (reachable) {
-            internetReachable = true
-            probeFailureCount = 0
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
-                connectWebSocket()
-            }
-        } else {
-            probeFailureCount += 1
-            if (probeFailureCount >= 2) {
-                internetReachable = false
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.close()
-                }
-            }
-        }
-
-        updateConnStatus()
-    }
-
-    function flushQueuedStrokes() {
-        if (isOfflineMode() || !ws || ws.readyState !== WebSocket.OPEN || queuedStrokes.length === 0) {
-            return
-        }
-
-        ws.send(JSON.stringify({
-            type: "batch",
-            strokes: queuedStrokes
-        }))
-
-        queuedStrokes = []
-        saveQueuedStrokes()
-    }
-
-    function renderIfNew(stroke) {
-        if (!stroke || stroke.type !== "stroke") return
-
-        if (stroke.id && seenStrokeIds.has(stroke.id)) {
-            return
-        }
-
-        if (stroke.id) {
-            seenStrokeIds.add(stroke.id)
-        }
-
-        drawStroke(stroke)
-        strokeCount++
-        updateStrokeCount()
-    }
-
-    function connectWebSocket() {
-        if (isOfflineMode()) {
-            return
-        }
-
-        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-            return
-        }
-
-        ws = new WebSocket(WS_URL)
-
-        ws.onopen = () => {
-            updateConnStatus()
-            flushQueuedStrokes()
-
-            if (reconnectTimer) {
-                clearTimeout(reconnectTimer)
-                reconnectTimer = null
-            }
-        }
-
-        ws.onclose = () => {
-            updateConnStatus()
-
-            if (!isOfflineMode()) {
-                scheduleReconnect()
-            }
-        }
-
-        ws.onerror = () => {
-            updateConnStatus()
-        }
-
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data)
-
-            if (data.type === "init") {
-                // Rehydrate any server strokes without wiping locally rendered offline strokes.
-                data.strokes.forEach(renderIfNew)
-                queuedStrokes.forEach(renderIfNew)
-                updateStrokeCount()
-                updatePendingCount()
-                flushQueuedStrokes()
-                return
-            }
-
-            if (data.type === "stroke") {
-                renderIfNew(data)
-            }
-
-            if (data.type === "clear") {
-                clearBoardLocal()
-            }
-        }
-    }
-
-    // Poll replica consistency every 2 seconds
-    setInterval(() => {
-        updateConnStatus()
-
-        if (!isOfflineMode() && (!ws || ws.readyState === WebSocket.CLOSED)) {
-            connectWebSocket()
-        }
-    }, 500)
-
-    loadQueuedStrokes()
-    probeInternetConnectivity()
-    connectWebSocket()
-    updateConnStatus()
-
-    probeTimer = setInterval(probeInternetConnectivity, 3000)
-
-    /* =========================
-       TOOL MANAGEMENT
-    ========================= */
-
-    function setTool(tool) {
-        state.tool = tool
-    }
-
-    colorPicker.onchange = (e)=>{
-        state.color = e.target.value
-    }
-
-    sizePicker.onchange = (e)=>{
-        state.size = e.target.value
-    }
-
-    /* =========================
-       MOUSE INPUT
-    ========================= */
-
-
-
-    canvas.addEventListener("mousedown", (e) => {
-
-        drawing = true
-
-        const rect = canvas.getBoundingClientRect()
-
-        prevX = e.clientX - rect.left
-        prevY = e.clientY - rect.top
-
-    })
-
-    canvas.addEventListener("mouseup", () => {
-        drawing = false
-    })
-
-    canvas.addEventListener("mouseleave", () => {
-        drawing = false
-    })
-
-    canvas.addEventListener("mousemove", (e) => {
-
-        if (!drawing) return
-
-        const rect = canvas.getBoundingClientRect()
-
-        const x = e.clientX - rect.left
-        const y = e.clientY - rect.top
-
-        const stroke = {
-            type: "stroke",
-            id: `${clientId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            clientId,
-            ts: Date.now(),
-            tool: state.tool,
-            color: state.color,
-            size: state.size,
-            x0: prevX,
-            y0: prevY,
-            x1: x,
-            y1: y
-        }
-
-        // Draw immediately for smooth UX in both online and offline mode.
-        renderIfNew(stroke)
-
-        if (!isOfflineMode() && ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(stroke))
-        } else {
-            queueOfflineStroke(stroke)
-        }
-
-        prevX = x
-        prevY = y
-
-    })
-
-    /* =========================
-       WEBSOCKET RECEIVE
-    ========================= */
-
-    window.addEventListener("online", () => {
-        if (forcedOfflineMode) {
-            return
-        }
-
-        internetReachable = true
-        probeFailureCount = 0
-        connectWebSocket()
-        updateConnStatus()
-        flushQueuedStrokes()
-    })
-
-    window.addEventListener("offline", () => {
-        internetReachable = false
-
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.close()
-        }
-
-        updateConnStatus()
-    })
-
-    /* =========================
-       RENDER ENGINE
-    ========================= */
-
-    function drawStroke(s) {
-
-        ctx.beginPath()
-
-        ctx.moveTo(s.x0, s.y0)
-        ctx.lineTo(s.x1, s.y1)
-
-        if (s.tool === "eraser") {
-            ctx.strokeStyle = "white"
-            ctx.lineWidth = 20
-        } else {
-            ctx.strokeStyle = s.color
-            ctx.lineWidth = s.size
-        }
-
-        ctx.stroke()
-
-    }
-
+  } catch(e) { addLog("offline mode", "connect") }
+}
+connectWS()
+
+// Swatches
+const sw = document.getElementById("swatches")
+PALETTE.forEach(hex => {
+  const el = document.createElement("div")
+  el.className = "swatch" + (hex === state.color ? " active" : "")
+  el.style.background = hex
+  if (hex === "#ffffff") el.style.boxShadow = "inset 0 0 0 1px var(--border)"
+  el.onclick = () => {
+    document.querySelectorAll(".swatch").forEach(s => s.classList.remove("active"))
+    el.classList.add("active")
+    state.color = hex
+    document.getElementById("customColor").value = hex
+    renderBrushPreview()
+  }
+  sw.appendChild(el)
+})
+document.getElementById("customColor").oninput = e => {
+  state.color = e.target.value
+  document.querySelectorAll(".swatch").forEach(s => s.classList.remove("active"))
+  renderBrushPreview()
+}
+
+document.getElementById("sizeSlider").oninput = e => {
+  state.size = +e.target.value
+  document.getElementById("sizeVal").textContent = state.size + "px"
+  renderBrushPreview()
+}
+document.getElementById("opacitySlider").oninput = e => {
+  state.opacity = +e.target.value / 100
+  document.getElementById("opacityVal").textContent = e.target.value + "%"
+  renderBrushPreview()
+}
+
+function setTool(btn) {
+  document.querySelectorAll(".tool-btn").forEach(b => b.classList.remove("active"))
+  btn.classList.add("active")
+  state.tool = btn.dataset.tool
+  document.getElementById("statTool").textContent = state.tool
+  renderBrushPreview()
+}
+
+canvas.addEventListener("mousedown", e => {
+  drawing = true
+  const r = canvas.getBoundingClientRect()
+  prevX = e.clientX - r.left; prevY = e.clientY - r.top
+})
+canvas.addEventListener("mouseup",    () => drawing = false)
+canvas.addEventListener("mouseleave", () => drawing = false)
+canvas.addEventListener("mousemove",  e => {
+  if (!drawing) return
+  const r = canvas.getBoundingClientRect()
+  const x = e.clientX - r.left, y = e.clientY - r.top
+  const s = { type:"stroke", tool:state.tool, color:state.color, size:state.size, opacity:state.opacity, x0:prevX, y0:prevY, x1:x, y1:y }
+  drawStroke(s, true)
+  if (wsConnected && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(s))
+  prevX = x; prevY = y
+})
+
+function applyStroke(c, s) {
+  c.save(); c.lineCap = "round"; c.lineJoin = "round"
+  c.globalAlpha = s.opacity ?? 1.0
+  switch (s.tool) {
+    case "pen":
+      c.strokeStyle=s.color; c.lineWidth=s.size*0.6
+      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke(); break
+    case "brush":
+      const br=6; c.globalAlpha=(s.opacity??1)*0.3
+      for(let i=0;i<br;i++){const o=(i-br/2)*(s.size*0.25)
+        c.strokeStyle=s.color; c.lineWidth=s.size*0.4
+        c.beginPath(); c.moveTo(s.x0+o,s.y0+o*0.4); c.lineTo(s.x1+o,s.y1+o*0.4); c.stroke()} break
+    case "marker":
+      c.strokeStyle=s.color; c.lineWidth=s.size*2.5
+      c.globalAlpha=Math.min((s.opacity??1)*0.55,0.7); c.lineCap="square"
+      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke(); break
+    case "chalk":
+      const cd=Math.hypot(s.x1-s.x0,s.y1-s.y0), cs=Math.max(1,Math.floor(cd*1.5))
+      c.fillStyle=s.color; c.globalAlpha=(s.opacity??1)*0.07
+      for(let i=0;i<=cs;i++){const t=i/cs, cx=s.x0+(s.x1-s.x0)*t, cy=s.y0+(s.y1-s.y0)*t, sp=s.size*0.9
+        for(let j=0;j<8;j++){c.beginPath(); c.arc(cx+(Math.random()-.5)*sp*2, cy+(Math.random()-.5)*sp*2, Math.random()*s.size*0.25+0.3,0,Math.PI*2); c.fill()}} break
+    case "spray":
+      const sd=Math.hypot(s.x1-s.x0,s.y1-s.y0), ss=Math.max(1,Math.floor(sd*0.5))
+      c.fillStyle=s.color
+      for(let i=0;i<=ss;i++){const t=i/ss, cx=s.x0+(s.x1-s.x0)*t, cy=s.y0+(s.y1-s.y0)*t, r=s.size*2.5
+        for(let j=0;j<25;j++){const a=Math.random()*Math.PI*2, rad=Math.sqrt(Math.random())*r
+          c.globalAlpha=(1-rad/r)*(s.opacity??1)*0.35; c.beginPath(); c.arc(cx+Math.cos(a)*rad,cy+Math.sin(a)*rad,Math.random()*0.8+0.2,0,Math.PI*2); c.fill()}} break
+    case "neon":
+      c.globalCompositeOperation="multiply"
+      ;[{w:s.size*6,a:.04},{w:s.size*3,a:.12},{w:s.size*1.2,a:.35},{w:s.size*0.4,a:.95}].forEach(l=>{
+        c.strokeStyle=s.color; c.lineWidth=l.w; c.globalAlpha=l.a*(s.opacity??1)
+        c.shadowColor=s.color; c.shadowBlur=l.w*1.5
+        c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke()})
+      c.shadowBlur=0; c.globalCompositeOperation="source-over"; break
+    case "eraser":
+      c.globalCompositeOperation="destination-out"; c.globalAlpha=1; c.lineWidth=s.size*3
+      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke()
+      c.globalCompositeOperation="source-over"; break
+  }
+  c.restore()
+}
+
+function drawStroke(s, isLocal) {
+  applyStroke(ctx, s)
+  if (isLocal) { strokeCount++; if (strokeCount % 15 === 0) addLog("using " + s.tool, "stroke") }
+}
+
+function renderBrushPreview() {
+  const pc = document.getElementById("brushPreview"), p = pc.getContext("2d")
+  p.clearRect(0,0,pc.width,pc.height); p.lineCap="round"; p.lineJoin="round"
+  applyStroke(p, { tool:state.tool, color:state.color, size:state.size, opacity:state.opacity, x0:14, y0:26, x1:pc.width-14, y1:26 })
+}
+renderBrushPreview()
+
+function updateConn() {
+  document.getElementById("connDot").className = "dot" + (wsConnected ? " ok" : "")
+  document.getElementById("connLabel").textContent = wsConnected ? "connected" : "offline"
+}
+function addLog(msg, type="stroke") {
+  const log = document.getElementById("log")
+  const ts  = new Date().toLocaleTimeString("en-US",{hour12:false,hour:"2-digit",minute:"2-digit",second:"2-digit"})
+  const el  = document.createElement("div")
+  el.className = "log-entry " + type; el.textContent = ts + "  " + msg
+  log.insertBefore(el, log.firstChild)
+  while (log.children.length > 40) log.removeChild(log.lastChild)
+}
+function clearBoard() {
+  ctx.clearRect(0,0,canvas.width,canvas.height); addLog("canvas cleared","sync")
+  if (wsConnected && ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:"clear"}))
+}
+
+addLog("ready", "connect")
 </script>
-
 </body>
-
 </html>

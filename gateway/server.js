@@ -91,9 +91,9 @@ const server = app.listen(PORT, () => {
 
 const wss = new WebSocket.Server({ server })
 
-function broadcastStroke(stroke) {
+function broadcastStroke(stroke, excludeClient) {
   wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
+    if (client !== excludeClient && client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify(stroke))
     }
   })
@@ -122,7 +122,7 @@ wss.on("connection", async (ws) => {
     if (payload.type === "stroke") {
       try {
         await sendToLeader(payload)
-        broadcastStroke(payload)
+        broadcastStroke(payload, ws)
       } catch (err) {
         console.error("Failed to process stroke:", err.message)
       }
@@ -138,7 +138,7 @@ wss.on("connection", async (ws) => {
 
         try {
           await sendToLeader(stroke)
-          broadcastStroke(stroke)
+          broadcastStroke(stroke, ws)
         } catch (err) {
           console.error("Failed to process queued stroke:", err.message)
         }
