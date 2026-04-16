@@ -355,23 +355,88 @@ POST /sync-log
 
 ---
 
-# 12. Phase 7 — Docker Deployment
+# 12. 
 
-Final architecture runs in containers:
+## ✅ Phase 7 Implementation Added
 
+This repository now includes Docker setup files:
+
+* `docker-compose.yml`
+* `gateway/Dockerfile`
+* `replica/Dockerfile`
+* `.dockerignore`
+
+### Container Networking
+
+* `gateway` connects to replicas using service DNS names:
+   * `http://replica1:4001`
+   * `http://replica2:4002`
+   * `http://replica3:4003`
+* `gateway/server.js` now reads replica URLs from `REPLICAS` environment variable.
+
+### Replica Identity and Roles
+
+Compose sets required environment variables for each node:
+
+* `REPLICA_ID`
+* `PORT`
+* `IS_LEADER`
+* `PEERS`
+
+Initial setup:
+
+* `replica1` starts as leader
+* `replica2`, `replica3` start as followers
+
+### Hot Reload in Containers
+
+Bind mounts are enabled so local code changes reflect immediately:
+
+* `./gateway:/app`
+* `./replica:/app`
+
+Services run with Node watch mode:
+
+* `node --watch server.js`
+
+---
+
+## Run Phase 7 (WSL / Docker)
+
+From project root, run:
+
+```bash
+docker compose up --build
 ```
-gateway
-replica1
-replica2
-replica3
+
+Run in detached mode:
+
+```bash
+docker compose up --build -d
 ```
 
-Docker Compose responsibilities:
+Stop all services:
 
-* start all services
-* configure networking
-* assign replica IDs
-* enable bind mounts for hot reload
+```bash
+docker compose down
+```
+
+### Service Ports
+
+* Gateway: `localhost:3000`
+* Replica 1: `localhost:4001`
+* Replica 2: `localhost:4002`
+* Replica 3: `localhost:4003`
+
+### Verify Replication
+
+```bash
+curl http://localhost:4001/log
+curl http://localhost:4002/log
+curl http://localhost:4003/log
+```
+
+All three logs should converge to the same committed stroke sequence.
 
 ---
 

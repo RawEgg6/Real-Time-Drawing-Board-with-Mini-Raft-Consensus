@@ -1,0 +1,73 @@
+services:
+  gateway:
+    build:
+      context: ./gateway
+    container_name: drawing-gateway
+    environment:
+      PORT: 3000
+      REPLICAS: http://replica1:4001,http://replica2:4002,http://replica3:4003
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./gateway:/app
+      - ./frontend:/app/frontend
+      - gateway_node_modules:/app/node_modules
+    command: sh -c "npm install && node --watch server.js"
+    depends_on:
+      - replica1
+      - replica2
+      - replica3
+
+  replica1:
+    build:
+      context: ./replica
+    container_name: drawing-replica1
+    environment:
+      REPLICA_ID: replica1
+      PORT: 4001
+      IS_LEADER: "true"
+      PEERS: http://replica2:4002,http://replica3:4003
+    ports:
+      - "4001:4001"
+    volumes:
+      - ./replica:/app
+      - replica1_node_modules:/app/node_modules
+    command: sh -c "npm install && node --watch server.js"
+
+  replica2:
+    build:
+      context: ./replica
+    container_name: drawing-replica2
+    environment:
+      REPLICA_ID: replica2
+      PORT: 4002
+      IS_LEADER: "false"
+      PEERS: http://replica1:4001,http://replica3:4003
+    ports:
+      - "4002:4002"
+    volumes:
+      - ./replica:/app
+      - replica2_node_modules:/app/node_modules
+    command: sh -c "npm install && node --watch server.js"
+
+  replica3:
+    build:
+      context: ./replica
+    container_name: drawing-replica3
+    environment:
+      REPLICA_ID: replica3
+      PORT: 4003
+      IS_LEADER: "false"
+      PEERS: http://replica1:4001,http://replica2:4002
+    ports:
+      - "4003:4003"
+    volumes:
+      - ./replica:/app
+      - replica3_node_modules:/app/node_modules
+    command: sh -c "npm install && node --watch server.js"
+
+volumes:
+  gateway_node_modules:
+  replica1_node_modules:
+  replica2_node_modules:
+  replica3_node_modules:
