@@ -529,18 +529,116 @@ function applyStroke(c, s) {
   c.globalAlpha = s.opacity ?? 1.0
 
   switch (s.tool) {
+
     case "pen":
-      c.strokeStyle=s.color; c.lineWidth=s.size*0.6
-      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke()
+      c.strokeStyle = s.color
+      c.lineWidth = s.size * 0.6
+      c.beginPath()
+      c.moveTo(s.x0, s.y0)
+      c.lineTo(s.x1, s.y1)
+      c.stroke()
       break
+
+    case "brush":
+      const br = 6
+      c.globalAlpha = (s.opacity ?? 1) * 0.3
+      for (let i = 0; i < br; i++) {
+        const o = (i - br / 2) * (s.size * 0.25)
+        c.strokeStyle = s.color
+        c.lineWidth = s.size * 0.4
+        c.beginPath()
+        c.moveTo(s.x0 + o, s.y0 + o * 0.4)
+        c.lineTo(s.x1 + o, s.y1 + o * 0.4)
+        c.stroke()
+      }
+      break
+
+    case "marker":
+      c.strokeStyle = s.color
+      c.lineWidth = s.size * 2.5
+      c.globalAlpha = Math.min((s.opacity ?? 1) * 0.55, 0.7)
+      c.lineCap = "square"
+      c.beginPath()
+      c.moveTo(s.x0, s.y0)
+      c.lineTo(s.x1, s.y1)
+      c.stroke()
+      break
+
+    case "chalk":
+      const cd = Math.hypot(s.x1 - s.x0, s.y1 - s.y0)
+      const cs = Math.max(1, Math.floor(cd * 1.5))
+      c.fillStyle = s.color
+      c.globalAlpha = (s.opacity ?? 1) * 0.07
+      for (let i = 0; i <= cs; i++) {
+        const t = i / cs
+        const cx = s.x0 + (s.x1 - s.x0) * t
+        const cy = s.y0 + (s.y1 - s.y0) * t
+        const sp = s.size * 0.9
+        for (let j = 0; j < 8; j++) {
+          c.beginPath()
+          c.arc(
+            cx + (Math.random() - 0.5) * sp * 2,
+            cy + (Math.random() - 0.5) * sp * 2,
+            Math.random() * s.size * 0.25 + 0.3,
+            0,
+            Math.PI * 2
+          )
+          c.fill()
+        }
+      }
+      break
+
+    case "spray":
+      const sd = Math.hypot(s.x1 - s.x0, s.y1 - s.y0)
+      const ss = Math.max(1, Math.floor(sd * 0.5))
+      c.fillStyle = s.color
+      for (let i = 0; i <= ss; i++) {
+        const t = i / ss
+        const cx = s.x0 + (s.x1 - s.x0) * t
+        const cy = s.y0 + (s.y1 - s.y0) * t
+        const r = s.size * 2.5
+        for (let j = 0; j < 25; j++) {
+          const a = Math.random() * Math.PI * 2
+          const rad = Math.sqrt(Math.random()) * r
+          c.globalAlpha = (1 - rad / r) * (s.opacity ?? 1) * 0.35
+          c.beginPath()
+          c.arc(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad, Math.random() * 0.8 + 0.2, 0, Math.PI * 2)
+          c.fill()
+        }
+      }
+      break
+
+    case "neon":
+      c.globalCompositeOperation = "multiply"
+      ;[
+        { w: s.size * 6, a: 0.04 },
+        { w: s.size * 3, a: 0.12 },
+        { w: s.size * 1.2, a: 0.35 },
+        { w: s.size * 0.4, a: 0.95 }
+      ].forEach(l => {
+        c.strokeStyle = s.color
+        c.lineWidth = l.w
+        c.globalAlpha = l.a * (s.opacity ?? 1)
+        c.shadowColor = s.color
+        c.shadowBlur = l.w * 1.5
+        c.beginPath()
+        c.moveTo(s.x0, s.y0)
+        c.lineTo(s.x1, s.y1)
+        c.stroke()
+      })
+      c.shadowBlur = 0
+      c.globalCompositeOperation = "source-over"
+      break
+
     case "eraser":
-      c.globalCompositeOperation="destination-out"; c.lineWidth=s.size*3
-      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke()
-      c.globalCompositeOperation="source-over"
+      c.globalCompositeOperation = "destination-out"
+      c.lineWidth = s.size * 3
+      c.beginPath()
+      c.moveTo(s.x0, s.y0)
+      c.lineTo(s.x1, s.y1)
+      c.stroke()
+      c.globalCompositeOperation = "source-over"
       break
-    default:
-      c.strokeStyle=s.color; c.lineWidth=s.size
-      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke()
   }
 
   c.restore()

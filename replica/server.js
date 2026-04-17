@@ -9,213 +9,174 @@ const PORT = Number(process.env.PORT || 4001)
 const IS_LEADER = String(process.env.IS_LEADER || "false").toLowerCase() === "true"
 const PEERS = (process.env.PEERS || "")
     .split(",")
-    .map((peer) => peer.trim())
+    .map(p => p.trim())
     .filter(Boolean)
 
 const strokeLog = new StrokeLog()
 
 let state = IS_LEADER ? "leader" : "follower"
 let currentLeader = IS_LEADER ? REPLICA_ID : null
+let prevLeader = null
 let lastHeartbeat = Date.now()
 
-const HEARTBEAT_INTERVAL = 1000
-const HEARTBEAT_TIMEOUT = 3000
-const SYNC_INTERVAL = 5000
+// 🔥 tuned (less spam)
+const HEARTBEAT_INTERVAL = 2000
+const HEARTBEAT_TIMEOUT = 7000
+const SYNC_INTERVAL = 6000
 
-// ✅ CRDT replication (merge, not append)
+// 🧠 logger
+function log(msg) {
+    console.log(`${REPLICA_ID} | ${msg}`)
+}
+
+// 🔁 state change
+function setState(newState) {
+    if (state !== newState) {
+        state = newState
+
+        if (state === "leader") {
+            log(`[LEADER] I am the leader`)
+        } else {
+            log(`[FOLLOWER] Current leader: ${currentLeader}`)
+        }
+    }
+}
+
+// ✅ CRDT replication
 async function replicateToFollowers(entry) {
     if (PEERS.length === 0) return []
 
-    const results = await Promise.all(
-        PEERS.map(async (peerUrl) => {
+    return Promise.all(
+        PEERS.map(async (peer) => {
             try {
-                const response = await fetch(`${peerUrl}/merge`, {
+                await fetch(`${peer}/merge`, {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ strokes: [entry] })
                 })
-
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`)
-                }
-
-                return { peerUrl, success: true }
-            } catch (error) {
-                return { peerUrl, success: false, error: error.message }
+                return { success: true }
+            } catch {
+                return { success: false }
             }
         })
     )
-
-    return results
 }
 
-// ❌ no longer clearing logs blindly — still allowed via replaceAll
+// CLEAR
 async function clearFollowersLog() {
     if (PEERS.length === 0) return []
 
-    const results = await Promise.all(
-        PEERS.map(async (peerUrl) => {
+    return Promise.all(
+        PEERS.map(async (peer) => {
             try {
-                const response = await fetch(`${peerUrl}/sync-log`, {
+                await fetch(`${peer}/sync-log`, {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ entries: [] })
                 })
-
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`)
-                }
-
-                return { peerUrl, success: true }
-            } catch (error) {
-                return { peerUrl, success: false, error: error.message }
+                return { success: true }
+            } catch {
+                return { success: false }
             }
         })
     )
-
-    return results
 }
 
-// ✅ LEADER receives stroke → merge (CRDT)
+// 🟢 LEADER WRITE
 app.post("/stroke", async (req, res) => {
     if (state !== "leader") {
-        return res.status(400).json({
-            error: "This replica is not the leader"
-        })
+        return res.status(400).json({ error: "Not leader" })
     }
 
     const { entry } = req.body || {}
-
-    if (!entry || entry.type !== "stroke" || !entry.id) {
-        return res.status(400).json({
-            error: "Invalid stroke entry (missing id/type)"
-        })
+    if (!entry || !entry.id) {
+        return res.status(400).json({ error: "Invalid stroke" })
     }
 
-    // ✅ CRDT merge instead of append
     strokeLog.merge([entry])
 
-    const replicationResults = await replicateToFollowers(entry)
+    const results = await replicateToFollowers(entry)
 
-    const successCount = replicationResults.filter(r => r.success).length + 1
-    const MAJORITY = Math.floor((PEERS.length + 1) / 2) + 1
+    const success = results.filter(r => r.success).length + 1
+    const majority = Math.floor((PEERS.length + 1) / 2) + 1
 
-    if (successCount >= MAJORITY) {
-        return res.json({
-            success: true,
-            committed: true,
-            replicaId: REPLICA_ID
-        })
+    if (success >= majority) {
+        return res.json({ committed: true })
     }
 
-    return res.status(500).json({
-        success: false,
-        error: "Failed to reach majority"
-    })
+    return res.status(500).json({ error: "No majority" })
 })
 
-// ✅ CRDT clear
+// CLEAR
 app.post("/clear", async (req, res) => {
     if (state !== "leader") {
-        return res.status(400).json({
-            error: "This replica is not the leader"
-        })
+        return res.status(400).json({ error: "Not leader" })
     }
 
     strokeLog.replaceAll([])
+    await clearFollowersLog()
 
-    const replicationResults = await clearFollowersLog()
-
-    const successCount = replicationResults.filter(r => r.success).length + 1
-    const MAJORITY = Math.floor((PEERS.length + 1) / 2) + 1
-
-    if (successCount >= MAJORITY) {
-        return res.json({
-            success: true,
-            committed: true,
-            replicaId: REPLICA_ID
-        })
-    }
-
-    return res.status(500).json({
-        success: false,
-        error: "Failed to reach majority"
-    })
+    return res.json({ committed: true })
 })
 
-// ✅ NEW CRDT MERGE ENDPOINT
+// CRDT MERGE
 app.post("/merge", (req, res) => {
     const { strokes } = req.body || {}
 
     if (!Array.isArray(strokes)) {
-        return res.status(400).json({
-            error: "Invalid strokes payload"
-        })
+        return res.status(400).json({ error: "Invalid payload" })
     }
 
     strokeLog.merge(strokes)
-
-    return res.json({
-        success: true,
-        replicaId: REPLICA_ID
-    })
+    return res.json({ success: true })
 })
 
-// ✅ LOG READ
+// READ
 app.get("/log", (req, res) => {
     res.json({
         replicaId: REPLICA_ID,
-        isLeader: state === "leader",
+        state,
         log: strokeLog.getAll()
     })
 })
 
-// ✅ SYNC (CRDT-safe replace + merge)
+// SYNC
 app.post("/sync-log", (req, res) => {
     const { entries } = req.body || {}
 
     if (!Array.isArray(entries)) {
-        return res.status(400).json({
-            success: false,
-            error: "Invalid entries payload"
-        })
+        return res.status(400).json({ error: "Invalid entries" })
     }
 
     strokeLog.replaceAll(entries)
-
-    return res.json({
-        success: true,
-        replicaId: REPLICA_ID,
-        length: entries.length
-    })
+    return res.json({ success: true })
 })
 
-// HEARTBEAT
+// 💓 HEARTBEAT
 app.post("/heartbeat", (req, res) => {
     const { leaderId } = req.body
 
-    if (state === "leader") {
-        return res.json({ success: true })
-    }
+    if (state !== "leader") {
+        if (currentLeader !== leaderId) {
+            prevLeader = currentLeader
+            currentLeader = leaderId
 
-    state = "follower"
-    currentLeader = leaderId
-    lastHeartbeat = Date.now()
+            log(`[FOLLOWER] Leader changed: ${prevLeader ?? "None"} → ${currentLeader}`)
+            setState("follower")
+        }
+
+        lastHeartbeat = Date.now()
+    }
 
     return res.json({ success: true })
 })
 
+// STATUS
 app.get("/status", (req, res) => {
-    res.json({
-        replicaId: REPLICA_ID,
-        state
-    })
+    res.json({ state })
 })
 
+// 💓 SEND HEARTBEATS (silent)
 async function sendHeartbeats() {
     if (state !== "leader") return
 
@@ -226,28 +187,29 @@ async function sendHeartbeats() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ leaderId: REPLICA_ID })
             })
-        } catch {
-            console.log("Heartbeat failed to", peer)
-        }
+        } catch {}
     }
 }
 
+// 🧠 FAILURE DETECTION
 async function detectLeaderFailure() {
     if (state === "leader") return
 
-    const now = Date.now()
+    if (Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT) {
 
-    if (now - lastHeartbeat > HEARTBEAT_TIMEOUT) {
-        console.log(`[${REPLICA_ID}] Leader timeout → becoming leader`)
-        state = "leader"
+        log(`[ELECTION] Waiting for leader election...`)
+
+        prevLeader = currentLeader
         currentLeader = REPLICA_ID
-        lastHeartbeat = Date.now()
 
+        log(`[LEADER CHANGE] ${prevLeader ?? "None"} → ${currentLeader}`)
+
+        setState("leader")
         await sendHeartbeats()
     }
 }
 
-// ✅ periodic sync (still valid with CRDT)
+// 🔄 SYNC (silent)
 async function syncFollowersLog() {
     if (state !== "leader") return
 
@@ -255,29 +217,32 @@ async function syncFollowersLog() {
 
     for (const peer of PEERS) {
         try {
-            const logRes = await fetch(`${peer}/log`)
-            if (!logRes.ok) continue
+            const res = await fetch(`${peer}/log`)
+            if (!res.ok) continue
 
-            const data = await logRes.json()
-            const followerLog = Array.isArray(data.log) ? data.log : []
+            const data = await res.json()
 
-            if (followerLog.length < leaderLog.length) {
+            if (data.log.length < leaderLog.length) {
                 await fetch(`${peer}/sync-log`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ entries: leaderLog })
                 })
             }
-        } catch (err) {
-            console.error(`[${REPLICA_ID}] Sync failed`, peer, err.message)
-        }
+        } catch {}
     }
 }
 
+// 🚀 START
 app.listen(PORT, () => {
-    console.log(`[${REPLICA_ID}] running on port ${PORT} (leader=${IS_LEADER})`)
+    log(`[START] Running on port ${PORT}`)
+
+    if (state === "leader") {
+        log(`[LEADER] I am the leader`)
+    }
 })
 
+// loops
 setInterval(sendHeartbeats, HEARTBEAT_INTERVAL)
 setInterval(detectLeaderFailure, 1000)
 setInterval(syncFollowersLog, SYNC_INTERVAL)
