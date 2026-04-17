@@ -2,7 +2,6 @@ const express = require("express")
 const StrokeLog = require("./log")
 
 const app = express()
-// Increase JSON body size limit so /sync-log can handle large logs
 app.use(express.json({ limit: "10mb" }))
 
 const REPLICA_ID = process.env.REPLICA_ID || "replica1"
@@ -10,227 +9,174 @@ const PORT = Number(process.env.PORT || 4001)
 const IS_LEADER = String(process.env.IS_LEADER || "false").toLowerCase() === "true"
 const PEERS = (process.env.PEERS || "")
     .split(",")
-    .map((peer) => peer.trim())
+    .map(p => p.trim())
     .filter(Boolean)
 
 const strokeLog = new StrokeLog()
 
 let state = IS_LEADER ? "leader" : "follower"
 let currentLeader = IS_LEADER ? REPLICA_ID : null
+let prevLeader = null
 let lastHeartbeat = Date.now()
 
-const HEARTBEAT_INTERVAL = 1000
-const HEARTBEAT_TIMEOUT = 3000
-const SYNC_INTERVAL = 5000
+// 🔥 tuned (less spam)
+const HEARTBEAT_INTERVAL = 2000
+const HEARTBEAT_TIMEOUT = 7000
+const SYNC_INTERVAL = 6000
 
-async function replicateToFollowers(entry) {
-    if (PEERS.length === 0) {
-        return []
+// 🧠 logger
+function log(msg) {
+    console.log(`${REPLICA_ID} | ${msg}`)
+}
+
+// 🔁 state change
+function setState(newState) {
+    if (state !== newState) {
+        state = newState
+
+        if (state === "leader") {
+            log(`[LEADER] I am the leader`)
+        } else {
+            log(`[FOLLOWER] Current leader: ${currentLeader}`)
+        }
     }
+}
 
-    const results = await Promise.all(
-        PEERS.map(async (peerUrl) => {
+// ✅ CRDT replication
+async function replicateToFollowers(entry) {
+    if (PEERS.length === 0) return []
+
+    return Promise.all(
+        PEERS.map(async (peer) => {
             try {
-                const response = await fetch(`${peerUrl}/append-entry`, {
+                await fetch(`${peer}/merge`, {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({ entry })
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ strokes: [entry] })
                 })
-
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`)
-                }
-
-                return {
-                    peerUrl,
-                    success: true
-                }
-            } catch (error) {
-                return {
-                    peerUrl,
-                    success: false,
-                    error: error.message
-                }
+                return { success: true }
+            } catch {
+                return { success: false }
             }
         })
     )
-
-    return results
 }
 
+// CLEAR
 async function clearFollowersLog() {
-    if (PEERS.length === 0) {
-        return []
-    }
+    if (PEERS.length === 0) return []
 
-    const results = await Promise.all(
-        PEERS.map(async (peerUrl) => {
+    return Promise.all(
+        PEERS.map(async (peer) => {
             try {
-                const response = await fetch(`${peerUrl}/sync-log`, {
+                await fetch(`${peer}/sync-log`, {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ entries: [] })
                 })
-
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`)
-                }
-
-                return { peerUrl, success: true }
-            } catch (error) {
-                return { peerUrl, success: false, error: error.message }
+                return { success: true }
+            } catch {
+                return { success: false }
             }
         })
     )
-
-    return results
 }
 
+// 🟢 LEADER WRITE
 app.post("/stroke", async (req, res) => {
     if (state !== "leader") {
-        return res.status(400).json({
-            error: "This replica is not the leader"
-        })
+        return res.status(400).json({ error: "Not leader" })
     }
 
     const { entry } = req.body || {}
-
-    if (!entry || entry.type !== "stroke") {
-        return res.status(400).json({
-            error: "Invalid stroke entry"
-        })
+    if (!entry || !entry.id) {
+        return res.status(400).json({ error: "Invalid stroke" })
     }
 
-    strokeLog.append(entry)
-    const replicationResults = await replicateToFollowers(entry)
-    //phase 5
-    // count successful replicas
-    const successCount = replicationResults.filter(r => r.success).length + 1
-    const MAJORITY = Math.floor((PEERS.length + 1) / 2) + 1
-if (successCount >= MAJORITY) {
-    return res.json({
-        success: true,
-        committed: true,
-        replicaId: REPLICA_ID
-    })
-} else {
-    console.error("Not enough replicas for commit")
+    strokeLog.merge([entry])
 
-    return res.status(500).json({
-        success: false,
-        error: "Failed to reach majority"
-    })
-}
-    /*const failedReplications = replicationResults.filter((result) => !result.success)
-    if (failedReplications.length > 0) {
-        console.error("Replication failures:", failedReplications)
+    const results = await replicateToFollowers(entry)
+
+    const success = results.filter(r => r.success).length + 1
+    const majority = Math.floor((PEERS.length + 1) / 2) + 1
+
+    if (success >= majority) {
+        return res.json({ committed: true })
     }
 
-    return res.json({
-        success: true,
-        replicaId: REPLICA_ID,
-        replicatedTo: replicationResults
-    }) */
+    return res.status(500).json({ error: "No majority" })
 })
 
+// CLEAR
 app.post("/clear", async (req, res) => {
     if (state !== "leader") {
-        return res.status(400).json({
-            error: "This replica is not the leader"
-        })
+        return res.status(400).json({ error: "Not leader" })
     }
 
-    strokeLog.setAll([])
-    const replicationResults = await clearFollowersLog()
+    strokeLog.replaceAll([])
+    await clearFollowersLog()
 
-    const successCount = replicationResults.filter(r => r.success).length + 1
-    const MAJORITY = Math.floor((PEERS.length + 1) / 2) + 1
-
-    if (successCount >= MAJORITY) {
-        return res.json({
-            success: true,
-            committed: true,
-            replicaId: REPLICA_ID
-        })
-    }
-
-    return res.status(500).json({
-        success: false,
-        error: "Failed to reach majority"
-    })
+    return res.json({ committed: true })
 })
 
-app.post("/append-entry", (req, res) => {
-    const { entry } = req.body || {}
+// CRDT MERGE
+app.post("/merge", (req, res) => {
+    const { strokes } = req.body || {}
 
-    if (!entry || entry.type !== "stroke") {
-        return res.status(400).json({
-            error: "Invalid stroke entry"
-        })
+    if (!Array.isArray(strokes)) {
+        return res.status(400).json({ error: "Invalid payload" })
     }
 
-    strokeLog.append(entry)
-
-    return res.json({
-        success: true,
-        replicaId: REPLICA_ID
-    })
+    strokeLog.merge(strokes)
+    return res.json({ success: true })
 })
 
+// READ
 app.get("/log", (req, res) => {
     res.json({
         replicaId: REPLICA_ID,
-        isLeader: state === "leader",
+        state,
         log: strokeLog.getAll()
     })
 })
 
-// phase 6 - log synchronization endpoint
+// SYNC
 app.post("/sync-log", (req, res) => {
     const { entries } = req.body || {}
 
     if (!Array.isArray(entries)) {
-        return res.status(400).json({
-            success: false,
-            error: "Invalid entries payload"
-        })
+        return res.status(400).json({ error: "Invalid entries" })
     }
 
-    strokeLog.setAll(entries)
-
-    return res.json({
-        success: true,
-        replicaId: REPLICA_ID,
-        length: entries.length
-    })
+    strokeLog.replaceAll(entries)
+    return res.json({ success: true })
 })
 
-//phase 4 - heartbeat
+// 💓 HEARTBEAT
 app.post("/heartbeat", (req, res) => {
     const { leaderId } = req.body
 
-    if (state === "leader") {
-        return res.json({ success: true })
-    }
+    if (state !== "leader") {
+        if (currentLeader !== leaderId) {
+            prevLeader = currentLeader
+            currentLeader = leaderId
 
-    state = "follower"
-    currentLeader = leaderId
-    lastHeartbeat = Date.now()
+            log(`[FOLLOWER] Leader changed: ${prevLeader ?? "None"} → ${currentLeader}`)
+            setState("follower")
+        }
+
+        lastHeartbeat = Date.now()
+    }
 
     return res.json({ success: true })
 })
 
+// STATUS
 app.get("/status", (req, res) => {
-    res.json({
-        replicaId: REPLICA_ID,
-        state
-    })
+    res.json({ state })
 })
 
+// 💓 SEND HEARTBEATS (silent)
 async function sendHeartbeats() {
     if (state !== "leader") return
 
@@ -238,35 +184,32 @@ async function sendHeartbeats() {
         try {
             await fetch(`${peer}/heartbeat`, {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    leaderId: REPLICA_ID
-                })
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leaderId: REPLICA_ID })
             })
-        } catch (err) {
-            console.log("Heartbeat failed to", peer)
-        }
+        } catch {}
     }
 }
 
+// 🧠 FAILURE DETECTION
 async function detectLeaderFailure() {
     if (state === "leader") return
 
-    const now = Date.now()
+    if (Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT) {
 
-    if (state !== "leader" && now - lastHeartbeat > HEARTBEAT_TIMEOUT) {
-        console.log(`[${REPLICA_ID}] Leader timeout → becoming leader`)
-        state = "leader"
+        log(`[ELECTION] Waiting for leader election...`)
+
+        prevLeader = currentLeader
         currentLeader = REPLICA_ID
-        lastHeartbeat = Date.now()
 
+        log(`[LEADER CHANGE] ${prevLeader ?? "None"} → ${currentLeader}`)
+
+        setState("leader")
         await sendHeartbeats()
     }
 }
 
-// phase 6 - periodically ensure followers are caught up with leader's log
+// 🔄 SYNC (silent)
 async function syncFollowersLog() {
     if (state !== "leader") return
 
@@ -274,42 +217,32 @@ async function syncFollowersLog() {
 
     for (const peer of PEERS) {
         try {
-            const logRes = await fetch(`${peer}/log`)
+            const res = await fetch(`${peer}/log`)
+            if (!res.ok) continue
 
-            if (!logRes.ok) {
-                continue
+            const data = await res.json()
+
+            if (data.log.length < leaderLog.length) {
+                await fetch(`${peer}/sync-log`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ entries: leaderLog })
+                })
             }
-
-            const data = await logRes.json()
-            const followerLog = Array.isArray(data.log) ? data.log : []
-
-            if (followerLog.length < leaderLog.length) {
-                try {
-                    await fetch(`${peer}/sync-log`, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify({ entries: leaderLog })
-                    })
-                } catch (err) {
-                    console.error(`[${REPLICA_ID}] Failed to sync log to`, peer, err.message)
-                }
-            }
-        } catch (err) {
-            console.error(`[${REPLICA_ID}] Failed to check follower log`, peer, err.message)
-        }
+        } catch {}
     }
 }
 
+// 🚀 START
 app.listen(PORT, () => {
-    console.log(`[${REPLICA_ID}] running on port ${PORT} (leader=${IS_LEADER})`)
-    if (IS_LEADER) {
-        console.log(`[${REPLICA_ID}] followers:`, PEERS.length > 0 ? PEERS.join(", ") : "none")
+    log(`[START] Running on port ${PORT}`)
+
+    if (state === "leader") {
+        log(`[LEADER] I am the leader`)
     }
 })
 
-//phase 4 addition: loops
+// loops
 setInterval(sendHeartbeats, HEARTBEAT_INTERVAL)
 setInterval(detectLeaderFailure, 1000)
 setInterval(syncFollowersLog, SYNC_INTERVAL)

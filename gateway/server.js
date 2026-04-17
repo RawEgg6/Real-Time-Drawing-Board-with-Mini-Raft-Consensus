@@ -28,23 +28,7 @@ const REPLICAS = (process.env.REPLICAS || "http://localhost:4001,http://localhos
   .map((url) => url.trim())
   .filter(Boolean)
 
-
-/* async function sendToLeader(stroke) {
-  for (const replica of REPLICAS) {
-    try {
-      await axios.post(replica + "/stroke", {
-        entry: stroke
-      })
-      return // success → this is leader
-    } catch (err) {
-      // ignore non-leader errors
-    }
-  }
-
-  throw new Error("No leader available")
-} */
-
-// phase 4
+// 🔍 Find current leader
 async function findLeader() {
   for (const replica of REPLICAS) {
     try {
@@ -53,7 +37,7 @@ async function findLeader() {
       if (res.data.state === "leader") {
         return replica
       }
-    } catch (err) {
+    } catch {
       // ignore dead replicas
     }
   }
@@ -61,29 +45,40 @@ async function findLeader() {
   throw new Error("No leader available")
 }
 
+// ✅ Send stroke and ensure COMMIT
 async function sendToLeader(stroke) {
   const leader = await findLeader()
 
-  await axios.post(leader + "/stroke", {
+  const res = await axios.post(leader + "/stroke", {
     entry: stroke
   })
+
+  if (!res.data || !res.data.committed) {
+    throw new Error("Stroke not committed")
+  }
 }
 
+// ✅ Clear board (leader only)
 async function clearLeaderLog() {
   const leader = await findLeader()
-  await axios.post(leader + "/clear")
+
+  const res = await axios.post(leader + "/clear")
+
+  if (!res.data || !res.data.committed) {
+    throw new Error("Clear not committed")
+  }
 }
 
+// ✅ Fetch log (any replica)
 async function getStrokeLog() {
   for (const replica of REPLICAS) {
     try {
       const res = await axios.get(replica + "/log")
       return res.data.log || []
-    } catch (err) {}
+    } catch {}
   }
   return []
 }
-
 
 const server = app.listen(PORT, () => {
   console.log("Gateway running on port", PORT)
@@ -102,7 +97,7 @@ function broadcastStroke(stroke, excludeClient) {
 wss.on("connection", async (ws) => {
   console.log("Client connected")
 
-  // send existing strokes
+  // ✅ Send current CRDT state
   const strokes = await getStrokeLog()
   ws.send(JSON.stringify({
     type: "init",
@@ -114,12 +109,18 @@ wss.on("connection", async (ws) => {
 
     try {
       payload = JSON.parse(message)
-    } catch (err) {
+    } catch {
       console.error("Invalid websocket payload")
       return
     }
 
-    if (payload.type === "stroke") {
+    // ✅ SINGLE STROKE (STRICT VALIDATION)
+    if (
+      payload.type === "stroke" &&
+      payload.id &&
+      payload.userId &&
+      typeof payload.seq === "number"
+    ) {
       try {
         await sendToLeader(payload)
         broadcastStroke(payload, ws)
@@ -130,9 +131,16 @@ wss.on("connection", async (ws) => {
       return
     }
 
+    // ✅ BATCH STROKES (OFFLINE SYNC)
     if (payload.type === "batch" && Array.isArray(payload.strokes)) {
       for (const stroke of payload.strokes) {
-        if (!stroke || stroke.type !== "stroke") {
+        if (
+          !stroke ||
+          stroke.type !== "stroke" ||
+          !stroke.id ||
+          !stroke.userId ||
+          typeof stroke.seq !== "number"
+        ) {
           continue
         }
 
@@ -140,13 +148,14 @@ wss.on("connection", async (ws) => {
           await sendToLeader(stroke)
           broadcastStroke(stroke, ws)
         } catch (err) {
-          console.error("Failed to process queued stroke:", err.message)
+          console.error("Failed queued stroke:", err.message)
         }
       }
 
       return
     }
 
+    // ✅ CLEAR BOARD
     if (payload.type === "clear") {
       try {
         await clearLeaderLog()
@@ -154,6 +163,8 @@ wss.on("connection", async (ws) => {
       } catch (err) {
         console.error("Failed to clear board:", err.message)
       }
+
+      return
     }
   })
 
