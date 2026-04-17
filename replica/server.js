@@ -2,7 +2,6 @@ const express = require("express")
 const StrokeLog = require("./log")
 
 const app = express()
-// Increase JSON body size limit so /sync-log can handle large logs
 app.use(express.json({ limit: "10mb" }))
 
 const REPLICA_ID = process.env.REPLICA_ID || "replica1"
@@ -23,36 +22,28 @@ const HEARTBEAT_INTERVAL = 1000
 const HEARTBEAT_TIMEOUT = 3000
 const SYNC_INTERVAL = 5000
 
+// ✅ CRDT replication (merge, not append)
 async function replicateToFollowers(entry) {
-    if (PEERS.length === 0) {
-        return []
-    }
+    if (PEERS.length === 0) return []
 
     const results = await Promise.all(
         PEERS.map(async (peerUrl) => {
             try {
-                const response = await fetch(`${peerUrl}/append-entry`, {
+                const response = await fetch(`${peerUrl}/merge`, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
                     },
-                    body: JSON.stringify({ entry })
+                    body: JSON.stringify({ strokes: [entry] })
                 })
 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`)
                 }
 
-                return {
-                    peerUrl,
-                    success: true
-                }
+                return { peerUrl, success: true }
             } catch (error) {
-                return {
-                    peerUrl,
-                    success: false,
-                    error: error.message
-                }
+                return { peerUrl, success: false, error: error.message }
             }
         })
     )
@@ -60,10 +51,9 @@ async function replicateToFollowers(entry) {
     return results
 }
 
+// ❌ no longer clearing logs blindly — still allowed via replaceAll
 async function clearFollowersLog() {
-    if (PEERS.length === 0) {
-        return []
-    }
+    if (PEERS.length === 0) return []
 
     const results = await Promise.all(
         PEERS.map(async (peerUrl) => {
@@ -90,6 +80,7 @@ async function clearFollowersLog() {
     return results
 }
 
+// ✅ LEADER receives stroke → merge (CRDT)
 app.post("/stroke", async (req, res) => {
     if (state !== "leader") {
         return res.status(400).json({
@@ -99,44 +90,35 @@ app.post("/stroke", async (req, res) => {
 
     const { entry } = req.body || {}
 
-    if (!entry || entry.type !== "stroke") {
+    if (!entry || entry.type !== "stroke" || !entry.id) {
         return res.status(400).json({
-            error: "Invalid stroke entry"
+            error: "Invalid stroke entry (missing id/type)"
         })
     }
 
-    strokeLog.append(entry)
+    // ✅ CRDT merge instead of append
+    strokeLog.merge([entry])
+
     const replicationResults = await replicateToFollowers(entry)
-    //phase 5
-    // count successful replicas
+
     const successCount = replicationResults.filter(r => r.success).length + 1
     const MAJORITY = Math.floor((PEERS.length + 1) / 2) + 1
-if (successCount >= MAJORITY) {
-    return res.json({
-        success: true,
-        committed: true,
-        replicaId: REPLICA_ID
-    })
-} else {
-    console.error("Not enough replicas for commit")
+
+    if (successCount >= MAJORITY) {
+        return res.json({
+            success: true,
+            committed: true,
+            replicaId: REPLICA_ID
+        })
+    }
 
     return res.status(500).json({
         success: false,
         error: "Failed to reach majority"
     })
-}
-    /*const failedReplications = replicationResults.filter((result) => !result.success)
-    if (failedReplications.length > 0) {
-        console.error("Replication failures:", failedReplications)
-    }
-
-    return res.json({
-        success: true,
-        replicaId: REPLICA_ID,
-        replicatedTo: replicationResults
-    }) */
 })
 
+// ✅ CRDT clear
 app.post("/clear", async (req, res) => {
     if (state !== "leader") {
         return res.status(400).json({
@@ -144,7 +126,8 @@ app.post("/clear", async (req, res) => {
         })
     }
 
-    strokeLog.setAll([])
+    strokeLog.replaceAll([])
+
     const replicationResults = await clearFollowersLog()
 
     const successCount = replicationResults.filter(r => r.success).length + 1
@@ -164,16 +147,17 @@ app.post("/clear", async (req, res) => {
     })
 })
 
-app.post("/append-entry", (req, res) => {
-    const { entry } = req.body || {}
+// ✅ NEW CRDT MERGE ENDPOINT
+app.post("/merge", (req, res) => {
+    const { strokes } = req.body || {}
 
-    if (!entry || entry.type !== "stroke") {
+    if (!Array.isArray(strokes)) {
         return res.status(400).json({
-            error: "Invalid stroke entry"
+            error: "Invalid strokes payload"
         })
     }
 
-    strokeLog.append(entry)
+    strokeLog.merge(strokes)
 
     return res.json({
         success: true,
@@ -181,6 +165,7 @@ app.post("/append-entry", (req, res) => {
     })
 })
 
+// ✅ LOG READ
 app.get("/log", (req, res) => {
     res.json({
         replicaId: REPLICA_ID,
@@ -189,7 +174,7 @@ app.get("/log", (req, res) => {
     })
 })
 
-// phase 6 - log synchronization endpoint
+// ✅ SYNC (CRDT-safe replace + merge)
 app.post("/sync-log", (req, res) => {
     const { entries } = req.body || {}
 
@@ -200,7 +185,7 @@ app.post("/sync-log", (req, res) => {
         })
     }
 
-    strokeLog.setAll(entries)
+    strokeLog.replaceAll(entries)
 
     return res.json({
         success: true,
@@ -209,7 +194,7 @@ app.post("/sync-log", (req, res) => {
     })
 })
 
-//phase 4 - heartbeat
+// HEARTBEAT
 app.post("/heartbeat", (req, res) => {
     const { leaderId } = req.body
 
@@ -238,14 +223,10 @@ async function sendHeartbeats() {
         try {
             await fetch(`${peer}/heartbeat`, {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    leaderId: REPLICA_ID
-                })
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ leaderId: REPLICA_ID })
             })
-        } catch (err) {
+        } catch {
             console.log("Heartbeat failed to", peer)
         }
     }
@@ -256,7 +237,7 @@ async function detectLeaderFailure() {
 
     const now = Date.now()
 
-    if (state !== "leader" && now - lastHeartbeat > HEARTBEAT_TIMEOUT) {
+    if (now - lastHeartbeat > HEARTBEAT_TIMEOUT) {
         console.log(`[${REPLICA_ID}] Leader timeout → becoming leader`)
         state = "leader"
         currentLeader = REPLICA_ID
@@ -266,7 +247,7 @@ async function detectLeaderFailure() {
     }
 }
 
-// phase 6 - periodically ensure followers are caught up with leader's log
+// ✅ periodic sync (still valid with CRDT)
 async function syncFollowersLog() {
     if (state !== "leader") return
 
@@ -275,41 +256,28 @@ async function syncFollowersLog() {
     for (const peer of PEERS) {
         try {
             const logRes = await fetch(`${peer}/log`)
-
-            if (!logRes.ok) {
-                continue
-            }
+            if (!logRes.ok) continue
 
             const data = await logRes.json()
             const followerLog = Array.isArray(data.log) ? data.log : []
 
             if (followerLog.length < leaderLog.length) {
-                try {
-                    await fetch(`${peer}/sync-log`, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify({ entries: leaderLog })
-                    })
-                } catch (err) {
-                    console.error(`[${REPLICA_ID}] Failed to sync log to`, peer, err.message)
-                }
+                await fetch(`${peer}/sync-log`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ entries: leaderLog })
+                })
             }
         } catch (err) {
-            console.error(`[${REPLICA_ID}] Failed to check follower log`, peer, err.message)
+            console.error(`[${REPLICA_ID}] Sync failed`, peer, err.message)
         }
     }
 }
 
 app.listen(PORT, () => {
     console.log(`[${REPLICA_ID}] running on port ${PORT} (leader=${IS_LEADER})`)
-    if (IS_LEADER) {
-        console.log(`[${REPLICA_ID}] followers:`, PEERS.length > 0 ? PEERS.join(", ") : "none")
-    }
 })
 
-//phase 4 addition: loops
 setInterval(sendHeartbeats, HEARTBEAT_INTERVAL)
 setInterval(detectLeaderFailure, 1000)
 setInterval(syncFollowersLog, SYNC_INTERVAL)

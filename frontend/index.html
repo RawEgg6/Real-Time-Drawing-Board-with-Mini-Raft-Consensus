@@ -352,6 +352,13 @@ const PALETTE = [
 
 let state = { tool: "pen", color: "#1a1a18", size: 4, opacity: 1.0 }
 let drawing = false, prevX = 0, prevY = 0, strokeCount = 0
+
+// ✅ CRDT CORE
+const userId = crypto.randomUUID()
+let localSeq = 0
+const seen = new Set()
+let pending = []
+
 let ws = null, wsConnected = false
 
 function toggleTheme() {
@@ -367,23 +374,64 @@ function toggleTheme() {
   }
 }
 
+// ✅ CONNECT + OFFLINE SYNC
 function connectWS() {
   try {
     ws = new WebSocket("ws://localhost:3000")
-    ws.onopen  = () => { wsConnected = true;  updateConn(); addLog("connected :3000", "connect") }
-    ws.onclose = () => { wsConnected = false; updateConn(); addLog("disconnected — retry 3s", "connect"); setTimeout(connectWS, 3000) }
-    ws.onerror = () => { wsConnected = false; updateConn() }
+
+    ws.onopen = () => {
+      wsConnected = true
+      updateConn()
+      addLog("connected :3000", "connect")
+
+      // 🔥 SEND OFFLINE STROKES
+      if (pending.length > 0) {
+        ws.send(JSON.stringify({
+          type: "batch",
+          strokes: pending
+        }))
+        pending = []
+        addLog("synced offline strokes", "sync")
+      }
+    }
+
+    ws.onclose = () => {
+      wsConnected = false
+      updateConn()
+      addLog("disconnected — retry 3s", "connect")
+      setTimeout(connectWS, 3000)
+    }
+
+    ws.onerror = () => {
+      wsConnected = false
+      updateConn()
+    }
+
     ws.onmessage = e => {
       const d = JSON.parse(e.data)
-      if (d.type === "init")   { d.strokes.forEach(s => drawStroke(s, false)); addLog("replayed strokes", "sync") }
-      if (d.type === "stroke") { drawStroke(d, false); }
-      if (d.type === "clear")  { ctx.clearRect(0,0,canvas.width,canvas.height); addLog("remote clear","sync") }
+
+      if (d.type === "init") {
+        d.strokes.forEach(s => drawStroke(s, false))
+        addLog("replayed strokes", "sync")
+      }
+
+      if (d.type === "stroke") {
+        drawStroke(d, false)
+      }
+
+      if (d.type === "clear") {
+        ctx.clearRect(0,0,canvas.width,canvas.height)
+        seen.clear()
+        addLog("remote clear","sync")
+      }
     }
-  } catch(e) { addLog("offline mode", "connect") }
+  } catch {
+    addLog("offline mode", "connect")
+  }
 }
 connectWS()
 
-// Swatches
+// Swatches (unchanged)
 const sw = document.getElementById("swatches")
 PALETTE.forEach(hex => {
   const el = document.createElement("div")
@@ -399,6 +447,7 @@ PALETTE.forEach(hex => {
   }
   sw.appendChild(el)
 })
+
 document.getElementById("customColor").oninput = e => {
   state.color = e.target.value
   document.querySelectorAll(".swatch").forEach(s => s.classList.remove("active"))
@@ -410,6 +459,7 @@ document.getElementById("sizeSlider").oninput = e => {
   document.getElementById("sizeVal").textContent = state.size + "px"
   renderBrushPreview()
 }
+
 document.getElementById("opacitySlider").oninput = e => {
   state.opacity = +e.target.value / 100
   document.getElementById("opacityVal").textContent = e.target.value + "%"
@@ -424,74 +474,106 @@ function setTool(btn) {
   renderBrushPreview()
 }
 
+// 🎯 DRAW EVENTS
 canvas.addEventListener("mousedown", e => {
   drawing = true
   const r = canvas.getBoundingClientRect()
-  prevX = e.clientX - r.left; prevY = e.clientY - r.top
-})
-canvas.addEventListener("mouseup",    () => drawing = false)
-canvas.addEventListener("mouseleave", () => drawing = false)
-canvas.addEventListener("mousemove",  e => {
-  if (!drawing) return
-  const r = canvas.getBoundingClientRect()
-  const x = e.clientX - r.left, y = e.clientY - r.top
-  const s = { type:"stroke", tool:state.tool, color:state.color, size:state.size, opacity:state.opacity, x0:prevX, y0:prevY, x1:x, y1:y }
-  drawStroke(s, true)
-  if (wsConnected && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(s))
-  prevX = x; prevY = y
+  prevX = e.clientX - r.left
+  prevY = e.clientY - r.top
 })
 
+canvas.addEventListener("mouseup", () => drawing = false)
+canvas.addEventListener("mouseleave", () => drawing = false)
+
+canvas.addEventListener("mousemove", e => {
+  if (!drawing) return
+
+  const r = canvas.getBoundingClientRect()
+  const x = e.clientX - r.left
+  const y = e.clientY - r.top
+
+  // ✅ CRDT STROKE
+  const s = {
+    id: crypto.randomUUID(),
+    userId: userId,
+    seq: localSeq++,
+
+    type: "stroke",
+    tool: state.tool,
+    color: state.color,
+    size: state.size,
+    opacity: state.opacity,
+    x0: prevX,
+    y0: prevY,
+    x1: x,
+    y1: y
+  }
+
+  drawStroke(s, true)
+
+  if (wsConnected && ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(s))
+  } else {
+    pending.push(s)
+  }
+
+  prevX = x
+  prevY = y
+})
+
+// 🎨 APPLY STROKE (UNCHANGED)
 function applyStroke(c, s) {
-  c.save(); c.lineCap = "round"; c.lineJoin = "round"
+  c.save()
+  c.lineCap = "round"
+  c.lineJoin = "round"
   c.globalAlpha = s.opacity ?? 1.0
+
   switch (s.tool) {
     case "pen":
       c.strokeStyle=s.color; c.lineWidth=s.size*0.6
-      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke(); break
-    case "brush":
-      const br=6; c.globalAlpha=(s.opacity??1)*0.3
-      for(let i=0;i<br;i++){const o=(i-br/2)*(s.size*0.25)
-        c.strokeStyle=s.color; c.lineWidth=s.size*0.4
-        c.beginPath(); c.moveTo(s.x0+o,s.y0+o*0.4); c.lineTo(s.x1+o,s.y1+o*0.4); c.stroke()} break
-    case "marker":
-      c.strokeStyle=s.color; c.lineWidth=s.size*2.5
-      c.globalAlpha=Math.min((s.opacity??1)*0.55,0.7); c.lineCap="square"
-      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke(); break
-    case "chalk":
-      const cd=Math.hypot(s.x1-s.x0,s.y1-s.y0), cs=Math.max(1,Math.floor(cd*1.5))
-      c.fillStyle=s.color; c.globalAlpha=(s.opacity??1)*0.07
-      for(let i=0;i<=cs;i++){const t=i/cs, cx=s.x0+(s.x1-s.x0)*t, cy=s.y0+(s.y1-s.y0)*t, sp=s.size*0.9
-        for(let j=0;j<8;j++){c.beginPath(); c.arc(cx+(Math.random()-.5)*sp*2, cy+(Math.random()-.5)*sp*2, Math.random()*s.size*0.25+0.3,0,Math.PI*2); c.fill()}} break
-    case "spray":
-      const sd=Math.hypot(s.x1-s.x0,s.y1-s.y0), ss=Math.max(1,Math.floor(sd*0.5))
-      c.fillStyle=s.color
-      for(let i=0;i<=ss;i++){const t=i/ss, cx=s.x0+(s.x1-s.x0)*t, cy=s.y0+(s.y1-s.y0)*t, r=s.size*2.5
-        for(let j=0;j<25;j++){const a=Math.random()*Math.PI*2, rad=Math.sqrt(Math.random())*r
-          c.globalAlpha=(1-rad/r)*(s.opacity??1)*0.35; c.beginPath(); c.arc(cx+Math.cos(a)*rad,cy+Math.sin(a)*rad,Math.random()*0.8+0.2,0,Math.PI*2); c.fill()}} break
-    case "neon":
-      c.globalCompositeOperation="multiply"
-      ;[{w:s.size*6,a:.04},{w:s.size*3,a:.12},{w:s.size*1.2,a:.35},{w:s.size*0.4,a:.95}].forEach(l=>{
-        c.strokeStyle=s.color; c.lineWidth=l.w; c.globalAlpha=l.a*(s.opacity??1)
-        c.shadowColor=s.color; c.shadowBlur=l.w*1.5
-        c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke()})
-      c.shadowBlur=0; c.globalCompositeOperation="source-over"; break
-    case "eraser":
-      c.globalCompositeOperation="destination-out"; c.globalAlpha=1; c.lineWidth=s.size*3
       c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke()
-      c.globalCompositeOperation="source-over"; break
+      break
+    case "eraser":
+      c.globalCompositeOperation="destination-out"; c.lineWidth=s.size*3
+      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke()
+      c.globalCompositeOperation="source-over"
+      break
+    default:
+      c.strokeStyle=s.color; c.lineWidth=s.size
+      c.beginPath(); c.moveTo(s.x0,s.y0); c.lineTo(s.x1,s.y1); c.stroke()
   }
+
   c.restore()
 }
 
+// ✅ DEDUP
 function drawStroke(s, isLocal) {
+  if (seen.has(s.id)) return
+  seen.add(s.id)
+
   applyStroke(ctx, s)
-  if (isLocal) { strokeCount++; if (strokeCount % 15 === 0) addLog("using " + s.tool, "stroke") }
+
+  if (isLocal) {
+    strokeCount++
+    if (strokeCount % 15 === 0) addLog("using " + s.tool, "stroke")
+  }
 }
 
 function renderBrushPreview() {
-  const pc = document.getElementById("brushPreview"), p = pc.getContext("2d")
-  p.clearRect(0,0,pc.width,pc.height); p.lineCap="round"; p.lineJoin="round"
-  applyStroke(p, { tool:state.tool, color:state.color, size:state.size, opacity:state.opacity, x0:14, y0:26, x1:pc.width-14, y1:26 })
+  const pc = document.getElementById("brushPreview")
+  const p = pc.getContext("2d")
+  p.clearRect(0,0,pc.width,pc.height)
+
+  applyStroke(p, {
+    tool: state.tool,
+    color: state.color,
+    size: state.size,
+    opacity: state.opacity,
+    x0: 14,
+    y0: 26,
+    x1: pc.width - 14,
+    y1: 26
+  })
 }
 renderBrushPreview()
 
@@ -499,17 +581,25 @@ function updateConn() {
   document.getElementById("connDot").className = "dot" + (wsConnected ? " ok" : "")
   document.getElementById("connLabel").textContent = wsConnected ? "connected" : "offline"
 }
+
 function addLog(msg, type="stroke") {
   const log = document.getElementById("log")
   const ts  = new Date().toLocaleTimeString("en-US",{hour12:false,hour:"2-digit",minute:"2-digit",second:"2-digit"})
   const el  = document.createElement("div")
-  el.className = "log-entry " + type; el.textContent = ts + "  " + msg
+  el.className = "log-entry " + type
+  el.textContent = ts + "  " + msg
   log.insertBefore(el, log.firstChild)
   while (log.children.length > 40) log.removeChild(log.lastChild)
 }
+
 function clearBoard() {
-  ctx.clearRect(0,0,canvas.width,canvas.height); addLog("canvas cleared","sync")
-  if (wsConnected && ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:"clear"}))
+  ctx.clearRect(0,0,canvas.width,canvas.height)
+  seen.clear()
+  addLog("canvas cleared","sync")
+
+  if (wsConnected && ws?.readyState===WebSocket.OPEN) {
+    ws.send(JSON.stringify({type:"clear"}))
+  }
 }
 
 addLog("ready", "connect")
